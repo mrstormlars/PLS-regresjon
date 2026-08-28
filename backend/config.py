@@ -41,3 +41,10 @@ DEFAULT_HEADER_ROW = 1
 # Temp file lifetime (seconds) before an uploaded file is evicted from the
 # in-memory/temp store.
 UPLOAD_TTL_SECONDS = 3600
+
+# optimize_variables: default absolute RMSEP tolerance allowed when testing
+# whether a variable can be permanently excluded (0.0 = no tolerance), and a
+# hard cap on the number of variables it will remove (safety bound against
+# runaway loops; not present in the original notebook).
+OPTIMIZE_TOLERANCE_DEFAULT = 0.0
+MAX_OPTIMIZE_ITERATIONS = 50

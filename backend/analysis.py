@@ -295,3 +295,128 @@ def run_analysis(
         "coefficients": coefficients,
         "diagnostics": diagnostics,
     }
+
+
+def _rmsep_at_optimal(result: dict) -> float:
+    """Extract the RMSEP value at a run_analysis result's optimal component count."""
+    optimal = result["optimal_components"]
+    for entry in result["rmse_per_component"]:
+        if entry["components"] == optimal:
+            return entry["rmsep"]
+    raise ValueError(
+        "Fant ikke RMSEP for optimalt antall komponenter."
+    )  # pragma: no cover
+
+
+def optimize_variables(
+    df: pd.DataFrame,
+    y_col: str,
+    excluded_cols: list[str] | None = None,
+    excluded_rows: list[int] | None = None,
+    limits: dict[str, dict[str, float]] | None = None,
+    log_y: bool = False,
+    log_x_cols: list[str] | None = None,
+    max_components: int = config.MAX_COMPONENTS_DEFAULT,
+    cv_folds: int = config.CV_FOLDS_DEFAULT,
+    tolerance: float = config.OPTIMIZE_TOLERANCE_DEFAULT,
+) -> dict:
+    """Greedy backward elimination of X-variables.
+
+    Ported from the reference notebook's optimize_pls_variables
+    (Inbox/PLS-regresjon.ipynb, cell 6), minus Fabric export, plotting, and
+    verbose printing.
+
+    Each pass sorts the currently-included variables by ascending
+    |coefficient| (from the current best model) and tests excluding each one
+    in turn: if the resulting RMSEP (at that fit's optimal component count)
+    is no more than `tolerance` above the current best RMSEP, the exclusion
+    is kept permanently and the best model/RMSEP are updated. A pass that
+    eliminates nothing ends the optimization. The last remaining predictor
+    is never removed. Bounded by config.MAX_OPTIMIZE_ITERATIONS successful
+    removals as a safety cap (not present in the original notebook).
+
+    Raises ValidationError (Norwegian message) if fewer than 2 X-variables
+    are available to start with.
+
+    Returns a dict with:
+        - history: list of {iteration, removed_col, rmsep}, one entry per
+          variable actually removed (not per candidate tested).
+        - final_excluded_cols: the final list of excluded column names.
+        - results: the final run_analysis result (same shape as /api/analyze).
+    """
+    excluded_cols = list(excluded_cols or [])
+
+    if y_col not in df.columns:
+        raise ValidationError(f"Kolonnen '{y_col}' finnes ikke i datasettet.")
+
+    all_vars = [c for c in df.columns if c != y_col]
+    available_vars = [c for c in all_vars if c not in excluded_cols]
+    if len(available_vars) < 2:
+        raise ValidationError(
+            "Trenger minst 2 X-variabler for å optimalisere variabelutvalg."
+        )
+
+    def _run(cols: list[str]) -> dict:
+        return run_analysis(
+            df,
+            y_col=y_col,
+            excluded_cols=cols,
+            excluded_rows=excluded_rows,
+            limits=limits,
+            log_y=log_y,
+            log_x_cols=log_x_cols,
+            max_components=max_components,
+            cv_folds=cv_folds,
+        )
+
+    best_excluded = list(excluded_cols)
+    best_result = _run(best_excluded)
+    best_rmsep = _rmsep_at_optimal(best_result)
+
+    history: list[dict] = []
+    iteration = 0
+
+    while iteration < config.MAX_OPTIMIZE_ITERATIONS:
+        included = [c for c in all_vars if c not in best_excluded]
+        if len(included) <= 1:
+            break  # never remove the last remaining predictor
+
+        candidates = sorted(
+            included, key=lambda c: abs(best_result["coefficients"].get(c, 0.0))
+        )
+
+        eliminated_in_pass = False
+        for var in candidates:
+            if var in best_excluded:
+                continue  # eliminated earlier in this same pass
+            if iteration >= config.MAX_OPTIMIZE_ITERATIONS:
+                break
+
+            trial_excluded = [*best_excluded, var]
+            if not [c for c in all_vars if c not in trial_excluded]:
+                continue  # would remove the last remaining predictor
+
+            try:
+                trial_result = _run(trial_excluded)
+                trial_rmsep = _rmsep_at_optimal(trial_result)
+            except ValidationError:
+                continue
+
+            if trial_rmsep <= best_rmsep + tolerance:
+                best_excluded = trial_excluded
+                best_rmsep = trial_rmsep
+                best_result = trial_result
+                eliminated_in_pass = True
+                iteration += 1
+                history.append(
+                    {"iteration": iteration, "removed_col": var, "rmsep": trial_rmsep}
+                )
+
+        if not eliminated_in_pass:
+            break
+
+    return {
+        "history": history,
+        "final_excluded_cols": best_excluded,
+        "results": best_result,
+    }
