@@ -5,9 +5,12 @@ rem ============================================================
 rem PLS-regresjon startup script (Windows)
 rem
 rem Double-click this file from Explorer, or run it from any
-rem working directory - it moves to the repo root itself. It will
-rem create/reuse a local virtual environment, start the FastAPI
-rem server, wait for it to respond, then open it in the browser.
+rem working directory - it moves to the repo root itself. It
+rem creates/reuses a local virtual environment, then runs the
+rem FastAPI server in the FOREGROUND of this console window: no
+rem separate server window is opened, so Ctrl+C here (or closing
+rem this window) stops the server. A small detached helper opens
+rem the browser once the server responds.
 rem ============================================================
 
 rem --- Configuration: change host/port here only ---
@@ -42,26 +45,15 @@ if not exist "%VENV_PY%" (
     )
 )
 
-echo [start.bat] Starting server on http://%HOST%:%PORT% ...
-start "PLS-regresjon server" cmd /k ""%VENV_PY%" -m uvicorn backend.app:app --host %HOST% --port %PORT%"
+rem --- Detached helper: waits for the server to respond (~30s timeout,
+rem     see open-browser-when-ready.ps1), then opens the browser. It runs
+rem     with "start /b" so it stays attached to THIS console (no new
+rem     window) and dies with it - Ctrl+C or closing this window kills the
+rem     helper along with the server below. Prints nothing on timeout; the
+rem     foreground uvicorn output already shows startup errors.
+start /b "" powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0open-browser-when-ready.ps1" -Url "http://%HOST%:%PORT%/"
 
-rem --- Poll until the server responds, then open the browser. Timeout after ~30s. ---
-set "READY=0"
-for /l %%i in (1,1,30) do (
-    powershell -NoProfile -Command "try { Invoke-WebRequest -Uri 'http://%HOST%:%PORT%/' -UseBasicParsing -TimeoutSec 2 | Out-Null; exit 0 } catch { exit 1 }" >nul 2>&1
-    if not errorlevel 1 (
-        set "READY=1"
-        goto :server_ready
-    )
-    timeout /t 1 /nobreak >nul
-)
-
-:server_ready
-if "%READY%"=="1" (
-    echo [start.bat] Server is up. Opening browser ...
-    start "" "http://%HOST%:%PORT%/"
-) else (
-    echo [start.bat] WARNING: Server did not respond within 30 seconds. Check the server window for errors.
-)
+echo [start.bat] Starting server on http://%HOST%:%PORT% (Ctrl+C to stop) ...
+"%VENV_PY%" -m uvicorn backend.app:app --host %HOST% --port %PORT%
 
 endlocal
