@@ -1,5 +1,7 @@
 """Tests for backend.analysis: PLS pipeline, outlier/low-impact detection, normalization."""
 
+import time
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -167,3 +169,47 @@ def test_compute_t2_guards_against_zero_variance_component():
     t2 = analysis._compute_t2(T)
     assert np.all(np.isfinite(t2))
     assert np.all(t2 > 0)
+
+
+def make_optimize_dataset(
+    n_rows: int = 60, n_noise: int = 4, seed: int = 42
+) -> pd.DataFrame:
+    """One strongly informative column plus several pure-noise columns."""
+    rng = np.random.default_rng(seed)
+    signal = rng.normal(size=n_rows)
+    y = 5.0 * signal + rng.normal(scale=0.05, size=n_rows)
+    df = pd.DataFrame({"Signal": signal})
+    for i in range(n_noise):
+        df[f"N{i + 1}"] = rng.normal(size=n_rows)
+    df["Y"] = y
+    return df
+
+
+def test_optimize_variables_removes_noise_and_improves_or_matches_rmsep():
+    df = make_optimize_dataset()
+    start = time.perf_counter()
+    initial = analysis.run_analysis(df, y_col="Y", max_components=3, cv_folds=5)
+    result = analysis.optimize_variables(
+        df, y_col="Y", max_components=3, cv_folds=5, tolerance=0.0
+    )
+    elapsed = time.perf_counter() - start
+    assert elapsed < 5.0
+
+    initial_best_rmsep = analysis._rmsep_at_optimal(initial)
+    final_best_rmsep = analysis._rmsep_at_optimal(result["results"])
+
+    assert result["final_excluded_cols"]  # at least one noise var removed
+    assert set(result["final_excluded_cols"]).issubset({"N1", "N2", "N3", "N4"})
+    assert final_best_rmsep <= initial_best_rmsep + 0.0
+    assert result["history"]
+    for i, entry in enumerate(result["history"], start=1):
+        assert entry["iteration"] == i
+        assert entry["removed_col"] in {"N1", "N2", "N3", "N4"}
+    assert result["results"]["coefficients"]  # Signal (and maybe some N's) remain
+    assert "Signal" in result["results"]["coefficients"]
+
+
+def test_optimize_variables_rejects_fewer_than_two_x_variables():
+    df = pd.DataFrame({"X1": list(range(1, 21)), "Y": list(range(1, 21))})
+    with pytest.raises(ValidationError, match="minst 2 X-variabler"):
+        analysis.optimize_variables(df, y_col="Y")

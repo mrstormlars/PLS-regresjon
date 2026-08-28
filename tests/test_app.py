@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import numpy as np
 from fastapi.testclient import TestClient
 
 from backend import config
@@ -285,3 +286,141 @@ def test_analyze_too_few_rows_returns_400():
     )
     assert response.status_code == 400
     assert "For få gyldige rader" in response.json()["detail"]
+
+
+def _optimize_csv_content():
+    rng = np.random.default_rng(42)
+    n = 60
+    signal = rng.normal(size=n)
+    noise_cols = {f"N{i + 1}": rng.normal(size=n) for i in range(4)}
+    y = 5.0 * signal + rng.normal(scale=0.05, size=n)
+    header = "Signal," + ",".join(noise_cols) + ",Y\n"
+    lines = [header]
+    for i in range(n):
+        row = [signal[i]] + [noise_cols[col][i] for col in noise_cols] + [y[i]]
+        lines.append(",".join(str(v) for v in row) + "\n")
+    return "".join(lines).encode()
+
+
+def test_optimize_removes_noise_variables_and_returns_expected_shape():
+    content = _optimize_csv_content()
+    file_id = _upload("optimize.csv", content, content_type="text/csv").json()[
+        "file_id"
+    ]
+    response = client.post(
+        "/api/optimize",
+        json={
+            "file_id": file_id,
+            "sheet": "CSV",
+            "header_row": 1,
+            "y_col": "Y",
+            "max_components": 3,
+            "cv_folds": 5,
+            "tolerance": 0.0,
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["final_excluded_cols"]
+    assert set(body["final_excluded_cols"]).issubset({"N1", "N2", "N3", "N4"})
+    assert body["history"]
+    for entry in body["history"]:
+        assert set(entry.keys()) == {"iteration", "removed_col", "rmsep"}
+    assert "Signal" in body["results"]["coefficients"]
+    for key in ("rmse_per_component", "optimal_components", "r2_cal", "diagnostics"):
+        assert key in body["results"]
+
+
+def test_optimize_rejects_fewer_than_two_x_variables_returns_400():
+    csv_content = b"X1,Y\n" + b"\n".join(
+        f"{i},{i * 2.0}".encode() for i in range(1, 21)
+    )
+    file_id = _upload("one_x.csv", csv_content, content_type="text/csv").json()[
+        "file_id"
+    ]
+    response = client.post(
+        "/api/optimize",
+        json={"file_id": file_id, "sheet": "CSV", "header_row": 1, "y_col": "Y"},
+    )
+    assert response.status_code == 400
+    assert "minst 2 X-variabler" in response.json()["detail"]
+
+
+def _diagnostics_payload():
+    return [
+        {"row_index": 1, "y_distance": 0.1, "X_distance": 0.1, "T2": 1.0},
+        {"row_index": 2, "y_distance": 0.2, "X_distance": 0.2, "T2": 1.2},
+        {"row_index": 3, "y_distance": 5.0, "X_distance": 0.3, "T2": 0.9},
+        {"row_index": 4, "y_distance": 0.15, "X_distance": 6.0, "T2": 1.1},
+        {"row_index": 5, "y_distance": 0.1, "X_distance": 0.1, "T2": 8.0},
+    ]
+
+
+def test_suggest_outliers_returns_row_indices_above_threshold():
+    response = client.post(
+        "/api/suggest-outliers",
+        json={
+            "diagnostics": _diagnostics_payload(),
+            "method": "y_distance",
+            "threshold": 1.0,
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["row_indices"] == [3]
+
+
+def test_suggest_outliers_high_threshold_returns_empty_list():
+    response = client.post(
+        "/api/suggest-outliers",
+        json={
+            "diagnostics": _diagnostics_payload(),
+            "method": "T2",
+            "threshold": 100.0,
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["row_indices"] == []
+
+
+def test_suggest_outliers_invalid_method_returns_400():
+    response = client.post(
+        "/api/suggest-outliers",
+        json={"diagnostics": _diagnostics_payload(), "method": "bogus"},
+    )
+    assert response.status_code == 400
+    assert "Ukjent metode" in response.json()["detail"]
+
+
+def test_suggest_outliers_empty_diagnostics_returns_400():
+    response = client.post(
+        "/api/suggest-outliers", json={"diagnostics": [], "method": "y_distance"}
+    )
+    assert response.status_code == 400
+    assert "tom" in response.json()["detail"].lower()
+
+
+def _coefficients_payload():
+    return [
+        {"variable": "X1", "coefficient": 1.0},
+        {"variable": "X2", "coefficient": 0.05},
+        {"variable": "X3", "coefficient": 0.5},
+    ]
+
+
+def test_suggest_low_impact_returns_columns_below_threshold():
+    response = client.post(
+        "/api/suggest-low-impact",
+        json={"coefficients": _coefficients_payload(), "threshold": 0.1},
+    )
+    assert response.status_code == 200
+    assert response.json()["columns"] == ["X2"]
+
+
+def test_suggest_low_impact_high_threshold_still_filters_by_value():
+    # A threshold above every |coefficient| returns all of them, not an error.
+    response = client.post(
+        "/api/suggest-low-impact",
+        json={"coefficients": _coefficients_payload(), "threshold": 100.0},
+    )
+    assert response.status_code == 200
+    assert set(response.json()["columns"]) == {"X1", "X2", "X3"}
