@@ -271,3 +271,22 @@ def test_optimize_variables_reports_max_iterations_when_safety_net_hit(monkeypat
     )
     assert len(result["history"]) == 3
     assert result["stop_reason"] == "max_iterations"
+
+
+def test_optimize_variables_reports_too_few_variables_when_natural_bound_hit():
+    # A huge tolerance makes every candidate pass the RMSEP check, so a
+    # single pass removes variables until only one predictor is left - the
+    # *natural* bound (available_vars - 1), reached inside the pass via the
+    # hit_cap path, distinct from the config.MAX_OPTIMIZE_ITERATIONS safety
+    # net (which is untouched here at its default of 50). This must be
+    # classified as "too_few_variables", not "max_iterations".
+    rng = np.random.default_rng(5)
+    n_rows = 15
+    df = pd.DataFrame({f"X{i + 1}": rng.normal(size=n_rows) for i in range(5)})
+    df["Y"] = rng.normal(size=n_rows)
+
+    result = analysis.optimize_variables(
+        df, y_col="Y", max_components=1, cv_folds=3, tolerance=1e6
+    )
+    assert len(result["history"]) == 4  # 5 available vars - 1 remaining
+    assert result["stop_reason"] == "too_few_variables"
