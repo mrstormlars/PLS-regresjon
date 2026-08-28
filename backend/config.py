@@ -41,3 +41,13 @@ DEFAULT_HEADER_ROW = 1
 # Temp file lifetime (seconds) before an uploaded file is evicted from the
 # in-memory/temp store.
 UPLOAD_TTL_SECONDS = 3600
+
+# optimize_variables: default absolute RMSEP tolerance allowed when testing
+# whether a variable can be permanently excluded (0.0 = no tolerance).
+OPTIMIZE_TOLERANCE_DEFAULT = 0.0
+
+# optimize_variables is primarily bounded by the number of available
+# X-variables minus one (the natural limit - you cannot remove more). This
+# is a secondary safety net only, for pathologically large variable counts;
+# hitting it is reported via stop_reason == "max_iterations", never silent.
+MAX_OPTIMIZE_ITERATIONS = 50

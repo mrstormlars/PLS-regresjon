@@ -85,21 +85,72 @@
     <div id="key-figures"></div>
 
     <h3>RMSEP/RMSEC vs. antall komponenter</h3>
-    <canvas id="rmse-chart" width="600" height="300"></canvas>
+    <div id="rmse-chart" class="plot"></div>
 
     <h3>Predikert vs. faktisk Y</h3>
-    <canvas id="predicted-actual-chart" width="600" height="300"></canvas>
+    <p class="status">Klikk for å markere en rad, Ctrl+klikk for å legge til/fjerne, eller dra for å markere flere.</p>
+    <div id="predicted-actual-chart" class="plot"></div>
 
     <h3>Scores (PC1 vs. PC2)</h3>
-    <canvas id="scores-chart" width="600" height="300"></canvas>
+    <div id="scores-chart" class="plot"></div>
 
     <h3>Koeffisienter</h3>
-    <canvas id="coefficients-chart" width="600" height="400"></canvas>
+    <p class="status">Klikk på en søyle for å markere en kolonne, Ctrl+klikk for å legge til/fjerne, eller dra for å markere flere.</p>
+    <div id="coefficients-chart" class="plot"></div>
 
-    <p id="selected-row-info" class="status"></p>
+    <div id="selection-controls">
+      <h3>Markering</h3>
+      <p id="row-selection-summary" class="status">Ingen rader markert.</p>
+      <p id="col-selection-summary" class="status">Ingen kolonner markert.</p>
+      <button id="clear-selection-button">Fjern markering</button>
+      <button id="rerun-without-selected-button" disabled>Kjør på nytt uten markerte</button>
+      <button id="rerun-only-selected-button" disabled>Kjør kun med markerte</button>
+    </div>
+
+    <div id="suggestions-section">
+      <h3>Forslag</h3>
+      <p>
+        <label for="suggest-outlier-method-select">Metode:</label>
+        <select id="suggest-outlier-method-select">
+          <option value="y_distance">Y-avstand</option>
+          <option value="X_distance">X-avstand</option>
+          <option value="T2">T²</option>
+        </select>
+        <label for="suggest-outlier-threshold-input">Terskel (valgfritt):</label>
+        <input type="number" id="suggest-outlier-threshold-input" step="any" />
+        <button id="suggest-outliers-button">Foreslå uteliggere</button>
+      </p>
+      <h4>Uteliggerkart</h4>
+      <p class="status">
+        X-avstand vs. y-avstand per rad, farget etter T². Bruk kartet til å vurdere hvor
+        terskelen bør settes; markering her følger de andre radplottene.
+      </p>
+      <div id="outlier-map-chart" class="plot"></div>
+      <p>
+        <label for="suggest-low-impact-threshold-input">Terskel (valgfritt):</label>
+        <input type="number" id="suggest-low-impact-threshold-input" step="any" />
+        <button id="suggest-low-impact-button">Foreslå variabler med lav påvirkning</button>
+      </p>
+      <p id="suggestion-status" class="status"></p>
+    </div>
+
+    <div id="optimize-section">
+      <h3>Automatisk variabeloptimalisering</h3>
+      <p>Trinn 1: kjør optimaliseringen. Forslaget markerer variabler i koeffisientplottet over, men endrer ingenting automatisk.</p>
+      <p>
+        <label for="optimize-tolerance-input">Toleranse for RMSEP-økning:</label>
+        <input type="number" id="optimize-tolerance-input" step="any" value="0" />
+        <button id="optimize-button">Optimaliser variabler</button>
+      </p>
+      <p id="optimize-status" class="status"></p>
+      <div id="optimize-history-chart" class="plot hidden"></div>
+      <div id="optimize-summary"></div>
+      <p>Trinn 2: bruk forslaget for å fjerne de markerte variablene og oppdatere resultatene.</p>
+      <button id="apply-optimized-button" class="hidden">Bruk optimalisert utvalg</button>
+    </div>
   </section>
 
-  <script src="vendor/chart.umd.min.js"></script>
+  <script src="vendor/plotly.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

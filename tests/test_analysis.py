@@ -1,5 +1,7 @@
 """Tests for backend.analysis: PLS pipeline, outlier/low-impact detection, normalization."""
 
+import time
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -167,3 +169,124 @@ def test_compute_t2_guards_against_zero_variance_component():
     t2 = analysis._compute_t2(T)
     assert np.all(np.isfinite(t2))
     assert np.all(t2 > 0)
+
+
+def make_optimize_dataset(
+    n_rows: int = 60, n_noise: int = 4, seed: int = 42
+) -> pd.DataFrame:
+    """One strongly informative column plus several pure-noise columns."""
+    rng = np.random.default_rng(seed)
+    signal = rng.normal(size=n_rows)
+    y = 5.0 * signal + rng.normal(scale=0.05, size=n_rows)
+    df = pd.DataFrame({"Signal": signal})
+    for i in range(n_noise):
+        df[f"N{i + 1}"] = rng.normal(size=n_rows)
+    df["Y"] = y
+    return df
+
+
+def test_optimize_variables_removes_noise_and_improves_or_matches_rmsep():
+    df = make_optimize_dataset()
+    start = time.perf_counter()
+    initial = analysis.run_analysis(df, y_col="Y", max_components=3, cv_folds=5)
+    result = analysis.optimize_variables(
+        df, y_col="Y", max_components=3, cv_folds=5, tolerance=0.0
+    )
+    elapsed = time.perf_counter() - start
+    assert elapsed < 5.0
+
+    initial_best_rmsep = analysis._rmsep_at_optimal(initial)
+    final_best_rmsep = analysis._rmsep_at_optimal(result["results"])
+
+    assert result["final_excluded_cols"]  # at least one noise var removed
+    assert set(result["final_excluded_cols"]).issubset({"N1", "N2", "N3", "N4"})
+    assert final_best_rmsep <= initial_best_rmsep + 0.0
+    assert result["history"]
+    for i, entry in enumerate(result["history"], start=1):
+        assert entry["iteration"] == i
+        assert entry["removed_col"] in {"N1", "N2", "N3", "N4"}
+    assert result["results"]["coefficients"]  # Signal (and maybe some N's) remain
+    assert "Signal" in result["results"]["coefficients"]
+    assert result["stop_reason"] in {"converged", "too_few_variables"}
+
+
+def test_optimize_variables_rejects_fewer_than_two_x_variables():
+    df = pd.DataFrame({"X1": list(range(1, 21)), "Y": list(range(1, 21))})
+    with pytest.raises(ValidationError, match="minst 2 X-variabler"):
+        analysis.optimize_variables(df, y_col="Y")
+
+
+def make_two_signal_dataset(
+    n_rows: int = 60, n_noise: int = 14, seed: int = 0
+) -> pd.DataFrame:
+    """Two informative columns plus many pure-noise columns.
+
+    Unlike make_optimize_dataset (one signal column), this leaves >=2
+    variables standing after all noise is removed, so optimization can end
+    via a genuine "tested and kept both" pass (stop_reason "converged")
+    rather than running out of variables ("too_few_variables").
+    """
+    rng = np.random.default_rng(seed)
+    signal1 = rng.normal(size=n_rows)
+    signal2 = rng.normal(size=n_rows)
+    y = 4.0 * signal1 - 3.0 * signal2 + rng.normal(scale=0.02, size=n_rows)
+    df = pd.DataFrame({"Signal1": signal1, "Signal2": signal2})
+    for i in range(n_noise):
+        df[f"N{i + 1}"] = rng.normal(size=n_rows)
+    df["Y"] = y
+    return df
+
+
+def test_optimize_variables_removes_all_noise_and_converges():
+    # Root-cause regression test: previously, hitting
+    # config.MAX_OPTIMIZE_ITERATIONS (a fixed 50) silently truncated the
+    # run with no way to tell it apart from genuine convergence. This
+    # dataset has 14 removable noise variables (> the old fixed cap would
+    # ever have been a problem for, but well above the "converged" test's
+    # historical scope of a handful) to prove removal isn't arbitrarily
+    # capped and stop_reason correctly reports "converged".
+    df = make_two_signal_dataset(n_noise=14)
+    start = time.perf_counter()
+    result = analysis.optimize_variables(
+        df, y_col="Y", max_components=2, cv_folds=5, tolerance=0.0
+    )
+    elapsed = time.perf_counter() - start
+    assert elapsed < 5.0
+
+    assert len(result["history"]) >= 12
+    assert set(result["final_excluded_cols"]) == {f"N{i + 1}" for i in range(14)}
+    assert result["stop_reason"] == "converged"
+    assert set(result["results"]["coefficients"]) == {"Signal1", "Signal2"}
+
+
+def test_optimize_variables_reports_max_iterations_when_safety_net_hit(monkeypatch):
+    # With the safety net set below the natural bound (14 removable noise
+    # vars), the run must stop exactly at the cap and say so via
+    # stop_reason, rather than silently returning a partial result that
+    # looks identical to a converged one.
+    monkeypatch.setattr(config, "MAX_OPTIMIZE_ITERATIONS", 3)
+    df = make_two_signal_dataset(n_noise=14)
+    result = analysis.optimize_variables(
+        df, y_col="Y", max_components=2, cv_folds=5, tolerance=0.0
+    )
+    assert len(result["history"]) == 3
+    assert result["stop_reason"] == "max_iterations"
+
+
+def test_optimize_variables_reports_too_few_variables_when_natural_bound_hit():
+    # A huge tolerance makes every candidate pass the RMSEP check, so a
+    # single pass removes variables until only one predictor is left - the
+    # *natural* bound (available_vars - 1), reached inside the pass via the
+    # hit_cap path, distinct from the config.MAX_OPTIMIZE_ITERATIONS safety
+    # net (which is untouched here at its default of 50). This must be
+    # classified as "too_few_variables", not "max_iterations".
+    rng = np.random.default_rng(5)
+    n_rows = 15
+    df = pd.DataFrame({f"X{i + 1}": rng.normal(size=n_rows) for i in range(5)})
+    df["Y"] = rng.normal(size=n_rows)
+
+    result = analysis.optimize_variables(
+        df, y_col="Y", max_components=1, cv_folds=3, tolerance=1e6
+    )
+    assert len(result["history"]) == 4  # 5 available vars - 1 remaining
+    assert result["stop_reason"] == "too_few_variables"
