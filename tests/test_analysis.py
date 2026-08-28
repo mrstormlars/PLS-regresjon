@@ -80,6 +80,26 @@ def test_run_analysis_applies_limits_and_log_y():
     assert len(result["diagnostics"]) < 40
 
 
+def test_run_analysis_log_x_cols_applies_log10_before_standardization():
+    # Y == log10(X1) exactly, so log-transforming X1 should let a single
+    # component fit near-perfectly.
+    n = 30
+    x1 = np.array([10.0**k for k in range(1, n + 1)])
+    y = np.arange(1, n + 1, dtype=float)
+    df = pd.DataFrame({"X1": x1, "Y": y})
+    result = analysis.run_analysis(
+        df, y_col="Y", log_x_cols=["X1"], max_components=1, cv_folds=3
+    )
+    assert result["r2_cal"] > 0.99
+
+
+def test_run_analysis_log_x_cols_all_non_positive_rejected():
+    n = config.MIN_VALID_ROWS
+    df = pd.DataFrame({"X1": [-5.0] * n, "Y": list(range(1, n + 1))})
+    with pytest.raises(ValidationError, match="For få gyldige rader"):
+        analysis.run_analysis(df, y_col="Y", log_x_cols=["X1"])
+
+
 def test_normalize_data_zscores_columns_and_skips_zero_variance():
     df = pd.DataFrame({"A": [1.0, 2.0, 3.0], "B": [5.0, 5.0, 5.0]})
     normalized = analysis.normalize_data(df)

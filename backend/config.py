@@ -34,6 +34,10 @@ ALLOWED_UPLOAD_EXTENSIONS = {".xlsx", ".csv"}
 # Preview
 PREVIEW_ROW_COUNT = 20
 
+# Row/column numbering: header_row/start_row/end_row/start_col/end_col are
+# all 1-based Excel-style numbers, matching what users see in Excel.
+DEFAULT_HEADER_ROW = 1
+
 # Temp file lifetime (seconds) before an uploaded file is evicted from the
 # in-memory/temp store.
 UPLOAD_TTL_SECONDS = 3600

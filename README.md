@@ -12,9 +12,10 @@ Under utvikling — prosjektstruktur og agent-arbeidsflyt er etablert; se `CLAUD
 ## Getting started
 
 **Windows:** double-click `scripts\start.bat` (or run it from a terminal). It creates/reuses
-a `.venv` virtual environment, installs `requirements.txt` if needed, starts the server, and
-opens `http://127.0.0.1:8000` in your browser once it responds. Server logs stay in the
-opened console window; press Ctrl+C there to stop it.
+a `.venv` virtual environment, installs `requirements.txt` if needed, then runs the server
+directly in that same window and opens `http://127.0.0.1:8000` in your browser once it
+responds. No separate server window is opened: press Ctrl+C in that window, or close it, to
+stop the server.
 
 **Manual (any OS):**
 

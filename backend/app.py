@@ -21,7 +21,9 @@ app = FastAPI(title="PLS-regresjon")
 class PreviewRequest(BaseModel):
     file_id: str
     sheet: str
-    header_row: int = 0
+    header_row: int = config.DEFAULT_HEADER_ROW
+    start_col: int | None = None
+    end_col: int | None = None
 
 
 class LimitBounds(BaseModel):
@@ -32,14 +34,17 @@ class LimitBounds(BaseModel):
 class AnalyzeRequest(BaseModel):
     file_id: str
     sheet: str
-    header_row: int = 0
+    header_row: int = config.DEFAULT_HEADER_ROW
     start_row: int | None = None
     end_row: int | None = None
+    start_col: int | None = None
+    end_col: int | None = None
     y_col: str
     excluded_cols: list[str] = []
     excluded_rows: list[int] = []
     limits: dict[str, LimitBounds] = {}
     log_y: bool = False
+    log_x_cols: list[str] = []
     max_components: int = config.MAX_COMPONENTS_DEFAULT
     cv_folds: int = config.CV_FOLDS_DEFAULT
 
@@ -70,14 +75,20 @@ async def preview_file(request: PreviewRequest):
     try:
         filename, content = parsing.get_upload(request.file_id)
         df = parsing.read_sheet(filename, content, request.sheet, request.header_row)
+        df = parsing.select_columns(df, request.start_col, request.end_col)
     except ValidationError as err:
         raise HTTPException(status_code=400, detail=str(err)) from err
 
     preview_df = df.head(config.PREVIEW_ROW_COUNT)
+    first_excel_row = request.header_row + 1
+    rows = _sanitize_records(preview_df)
+    for position, row in enumerate(rows):
+        row["row_index"] = first_excel_row + position
+
     return {
         "columns": [str(c) for c in df.columns],
         "n_rows": len(df),
-        "rows": _sanitize_records(preview_df),
+        "rows": rows,
     }
 
 
@@ -86,7 +97,10 @@ async def analyze_file(request: AnalyzeRequest):
     try:
         filename, content = parsing.get_upload(request.file_id)
         df = parsing.read_sheet(filename, content, request.sheet, request.header_row)
-        df = parsing.extract_range(df, request.start_row, request.end_row)
+        df = parsing.select_columns(df, request.start_col, request.end_col)
+        df = parsing.extract_range(
+            df, request.header_row, request.start_row, request.end_row
+        )
         limits = {col: bounds.model_dump() for col, bounds in request.limits.items()}
         result = analysis.run_analysis(
             df,
@@ -95,6 +109,7 @@ async def analyze_file(request: AnalyzeRequest):
             excluded_rows=request.excluded_rows,
             limits=limits,
             log_y=request.log_y,
+            log_x_cols=request.log_x_cols,
             max_components=request.max_components,
             cv_folds=request.cv_folds,
         )
