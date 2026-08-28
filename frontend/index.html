@@ -120,6 +120,12 @@
         <input type="number" id="suggest-outlier-threshold-input" step="any" />
         <button id="suggest-outliers-button">Foreslå uteliggere</button>
       </p>
+      <h4>Uteliggerkart</h4>
+      <p class="status">
+        X-avstand vs. y-avstand per rad, farget etter T². Bruk kartet til å vurdere hvor
+        terskelen bør settes; markering her følger de andre radplottene.
+      </p>
+      <div id="outlier-map-chart" class="plot"></div>
       <p>
         <label for="suggest-low-impact-threshold-input">Terskel (valgfritt):</label>
         <input type="number" id="suggest-low-impact-threshold-input" step="any" />

@@ -388,16 +388,35 @@ function toggleOrSetSelection(selectionSet, value, domEvent) {
 function applySelectionStyling(plotId, selectionSet) {
   const meta = state.plotMeta[plotId];
   if (!meta) return;
+  // Target only the traces listed in meta (e.g. skips a non-selectable
+  // reference line trace) so restyle never sends a mismatched-length color
+  // array to a trace it doesn't describe.
+  const traceIndices = meta.customData.map((_, i) => i);
+
+  if (meta.useOutline) {
+    // Fill color already conveys a continuous value (e.g. T2 on the outlier
+    // map), so selection is shown as a marker outline instead of replacing
+    // the fill color.
+    const lineColors = meta.customData.map((customArray) =>
+      customArray.map((value) => (selectionSet.has(value) ? SELECTION_COLOR : "rgba(0,0,0,0)"))
+    );
+    const lineWidths = meta.customData.map((customArray) =>
+      customArray.map((value) => (selectionSet.has(value) ? 3 : 0))
+    );
+    Plotly.restyle(
+      plotId,
+      { "marker.line.color": lineColors, "marker.line.width": lineWidths },
+      traceIndices
+    );
+    return;
+  }
+
   const colorsPerTrace = meta.customData.map((customArray, traceIndex) => {
     const base = meta.baseColors[traceIndex];
     return customArray.map((value, i) =>
       selectionSet.has(value) ? SELECTION_COLOR : Array.isArray(base) ? base[i] : base
     );
   });
-  // Target only the traces listed in meta (e.g. skips a non-selectable
-  // reference line trace) so restyle never sends a mismatched-length color
-  // array to a trace it doesn't describe.
-  const traceIndices = meta.customData.map((_, i) => i);
   Plotly.restyle(plotId, { "marker.color": colorsPerTrace }, traceIndices);
 }
 
@@ -419,6 +438,7 @@ function updateSelectionSummary() {
 function refreshRowSelection() {
   applySelectionStyling("predicted-actual-chart", state.selectedRows);
   applySelectionStyling("scores-chart", state.selectedRows);
+  applySelectionStyling("outlier-map-chart", state.selectedRows);
   updateSelectionSummary();
 }
 
@@ -704,6 +724,8 @@ function renderResults(result) {
   renderPredictedActualChart(result);
   renderScoresChart(result);
   renderCoefficientsChart(result);
+  renderOutlierMapChart(result);
+  updateOutlierMapGuide();
 
   refreshRowSelection();
   refreshColSelection();
@@ -865,6 +887,96 @@ function renderScoresChart(result) {
   state.plotMeta["scores-chart"] = { customData: [rowIndex], baseColors: [baseColor] };
   bindRowSelectionEvents("scores-chart");
 }
+
+function renderOutlierMapChart(result) {
+  const rowIndex = result.diagnostics.map((d) => d.row_index);
+  const xValues = result.diagnostics.map((d) => d.X_distance);
+  const yValues = result.diagnostics.map((d) => d.y_distance);
+  const t2Values = result.diagnostics.map((d) => d.T2);
+
+  Plotly.newPlot(
+    "outlier-map-chart",
+    [
+      {
+        x: xValues,
+        y: yValues,
+        customdata: rowIndex,
+        mode: "markers",
+        type: "scatter",
+        name: "Uteliggerkart",
+        marker: {
+          color: t2Values,
+          colorscale: "Viridis",
+          showscale: true,
+          colorbar: { title: "T²" },
+          line: { width: 0 },
+        },
+        text: rowIndex.map((r, i) => `Rad ${r}, T²=${t2Values[i].toFixed(4)}`),
+        hovertemplate: "%{text}<br>X-avstand: %{x}<br>y-avstand: %{y}<extra></extra>",
+      },
+    ],
+    {
+      title: "Uteliggerkart",
+      xaxis: { title: "X-avstand" },
+      yaxis: { title: "y-avstand" },
+      dragmode: "select",
+      showlegend: false,
+    },
+    PLOTLY_CONFIG
+  );
+
+  state.plotMeta["outlier-map-chart"] = { customData: [rowIndex], useOutline: true };
+  bindRowSelectionEvents("outlier-map-chart");
+}
+
+// Draws a threshold guide line on the outlier map matching the current
+// suggestion controls: horizontal for y_distance, vertical for X_distance,
+// none for T2 (already conveyed by marker color). Called on every
+// method/threshold change and whenever the map is (re)rendered.
+function updateOutlierMapGuide() {
+  const gd = el("outlier-map-chart");
+  if (!gd || !gd.data) return; // not rendered yet
+
+  const method = el("suggest-outlier-method-select").value;
+  const thresholdRaw = el("suggest-outlier-threshold-input").value;
+  const threshold = thresholdRaw === "" ? null : parseFloat(thresholdRaw);
+
+  let shapes = [];
+  if (threshold !== null && !Number.isNaN(threshold)) {
+    if (method === "y_distance") {
+      shapes = [
+        {
+          type: "line",
+          xref: "paper",
+          x0: 0,
+          x1: 1,
+          yref: "y",
+          y0: threshold,
+          y1: threshold,
+          line: { color: "red", dash: "dot" },
+        },
+      ];
+    } else if (method === "X_distance") {
+      shapes = [
+        {
+          type: "line",
+          yref: "paper",
+          y0: 0,
+          y1: 1,
+          xref: "x",
+          x0: threshold,
+          x1: threshold,
+          line: { color: "red", dash: "dot" },
+        },
+      ];
+    }
+    // T2: no guide line - color already conveys it.
+  }
+  Plotly.relayout(gd, { shapes });
+}
+
+el("suggest-outlier-method-select").addEventListener("change", updateOutlierMapGuide);
+el("suggest-outlier-threshold-input").addEventListener("input", updateOutlierMapGuide);
 
 function renderCoefficientsChart(result) {
   const entries = Object.entries(result.coefficients);
