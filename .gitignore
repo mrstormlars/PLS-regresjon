@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Uploaded user data — never commit datasets
+uploads/
+*.xlsx
+*.csv
+!tests/fixtures/*.xlsx
+!tests/fixtures/*.csv
+
+# Local settings
+.claude/settings.local.json
+.claude/worktrees/
+
+# OS
+Thumbs.db
+.DS_Store
