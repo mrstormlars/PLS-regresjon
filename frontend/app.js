@@ -630,6 +630,13 @@ el("suggest-low-impact-button").addEventListener("click", async () => {
 // Automatic variable optimization.
 // ---------------------------------------------------------------------------
 
+// Machine-readable stop_reason -> Norwegian explanation shown in the UI.
+const STOP_REASON_LABELS = {
+  converged: "ingen forbedring i en hel runde",
+  max_iterations: "nådde det maksimale antallet iterasjoner",
+  too_few_variables: "for få variabler igjen til å fortsette",
+};
+
 el("optimize-button").addEventListener("click", async () => {
   if (!state.lastAnalyzePayload) {
     setStatus("optimize-status", "Kjør en analyse først.", true);
@@ -646,16 +653,26 @@ el("optimize-button").addEventListener("click", async () => {
     const data = await postJson("/api/optimize", payload);
     state.lastOptimizeResult = data;
     renderOptimizeHistory(data);
+    renderOptimizeSummary(data);
+
+    // Pre-select the removed variables in the COLUMN selection domain, via
+    // the same mechanism as suggest-low-impact - no special-casing. This
+    // only highlights them; it does not change any settings automatically.
+    state.selectedCols.clear();
+    for (const entry of data.history) state.selectedCols.add(entry.removed_col);
+    refreshColSelection();
+
+    const stopLabel = STOP_REASON_LABELS[data.stop_reason] || data.stop_reason;
     if (data.final_excluded_cols.length) {
       setStatus(
         "optimize-status",
-        `Optimalisering fullført: ${data.final_excluded_cols.length} variabel/variabler kan fjernes.`
+        `Optimalisering fullført: ${data.final_excluded_cols.length} variabel/variabler kan fjernes. Stoppet: ${stopLabel}.`
       );
       el("apply-optimized-button").classList.remove("hidden");
     } else {
       setStatus(
         "optimize-status",
-        "Optimalisering fullført: ingen variabler kunne fjernes innenfor toleransen."
+        `Optimalisering fullført: ingen variabler kunne fjernes innenfor toleransen. Stoppet: ${stopLabel}.`
       );
       el("apply-optimized-button").classList.add("hidden");
     }
@@ -692,6 +709,36 @@ function renderOptimizeHistory(data) {
     },
     PLOTLY_CONFIG
   );
+}
+
+// Norwegian summary: removed variables in removal order (with RMSEP after
+// each removal) and the variables that were kept.
+function renderOptimizeSummary(data) {
+  const container = el("optimize-summary");
+  container.innerHTML = "";
+
+  const removedHeading = document.createElement("p");
+  removedHeading.innerHTML = "<strong>Fjernede variabler (i rekkefølge):</strong>";
+  container.appendChild(removedHeading);
+
+  if (data.history.length) {
+    const list = document.createElement("ol");
+    for (const entry of data.history) {
+      const item = document.createElement("li");
+      item.textContent = `${entry.removed_col} (RMSEP etter fjerning: ${entry.rmsep.toFixed(4)})`;
+      list.appendChild(item);
+    }
+    container.appendChild(list);
+  } else {
+    const none = document.createElement("p");
+    none.textContent = "Ingen variabler ble fjernet.";
+    container.appendChild(none);
+  }
+
+  const keptCols = Object.keys(data.results.coefficients);
+  const keptHeading = document.createElement("p");
+  keptHeading.innerHTML = `<strong>Beholdte variabler:</strong> ${keptCols.join(", ") || "ingen"}`;
+  container.appendChild(keptHeading);
 }
 
 el("apply-optimized-button").addEventListener("click", () => {

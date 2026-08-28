@@ -327,6 +327,7 @@ def test_optimize_removes_noise_variables_and_returns_expected_shape():
     for entry in body["history"]:
         assert set(entry.keys()) == {"iteration", "removed_col", "rmsep"}
     assert "Signal" in body["results"]["coefficients"]
+    assert body["stop_reason"] in {"converged", "too_few_variables", "max_iterations"}
     for key in ("rmse_per_component", "optimal_components", "r2_cal", "diagnostics"):
         assert key in body["results"]
 

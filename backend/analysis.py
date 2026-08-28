@@ -331,9 +331,20 @@ def optimize_variables(
     in turn: if the resulting RMSEP (at that fit's optimal component count)
     is no more than `tolerance` above the current best RMSEP, the exclusion
     is kept permanently and the best model/RMSEP are updated. A pass that
-    eliminates nothing ends the optimization. The last remaining predictor
-    is never removed. Bounded by config.MAX_OPTIMIZE_ITERATIONS successful
-    removals as a safety cap (not present in the original notebook).
+    eliminates nothing ends the optimization (stop_reason "converged"). The
+    last remaining predictor is never removed; running out of removable
+    variables ends the optimization too (stop_reason "too_few_variables").
+
+    The iteration count is bounded by the number of available X-variables
+    minus one (you cannot remove more than that), further capped by
+    config.MAX_OPTIMIZE_ITERATIONS as a safety net against pathologically
+    large variable counts. If that combined cap is reached before either
+    natural stopping condition, the optimization still returns its
+    best-so-far result, with stop_reason "max_iterations" so callers can
+    tell a capped run apart from a converged one (previously this cap was
+    hit silently: a 60-pure-noise-variable dataset stopped at exactly 50
+    removals - the old fixed MAX_OPTIMIZE_ITERATIONS - indistinguishable in
+    the response from genuine convergence).
 
     Raises ValidationError (Norwegian message) if fewer than 2 X-variables
     are available to start with.
@@ -343,6 +354,7 @@ def optimize_variables(
           variable actually removed (not per candidate tested).
         - final_excluded_cols: the final list of excluded column names.
         - results: the final run_analysis result (same shape as /api/analyze).
+        - stop_reason: "converged" | "max_iterations" | "too_few_variables".
     """
     excluded_cols = list(excluded_cols or [])
 
@@ -375,21 +387,33 @@ def optimize_variables(
 
     history: list[dict] = []
     iteration = 0
+    # Natural bound: at most (available - 1) removals, since at least one
+    # predictor must remain. config.MAX_OPTIMIZE_ITERATIONS is a secondary
+    # safety net for pathologically large variable counts; only report
+    # "max_iterations" when *that* safety net (not the natural bound) is
+    # what actually cut the run short.
+    natural_bound = len(available_vars) - 1
+    effective_max_iterations = min(natural_bound, config.MAX_OPTIMIZE_ITERATIONS)
+    capped_by_safety_net = effective_max_iterations < natural_bound
 
-    while iteration < config.MAX_OPTIMIZE_ITERATIONS:
+    stop_reason = "converged"
+    while True:
         included = [c for c in all_vars if c not in best_excluded]
         if len(included) <= 1:
-            break  # never remove the last remaining predictor
+            stop_reason = "too_few_variables"
+            break
 
         candidates = sorted(
             included, key=lambda c: abs(best_result["coefficients"].get(c, 0.0))
         )
 
         eliminated_in_pass = False
+        hit_cap = False
         for var in candidates:
             if var in best_excluded:
                 continue  # eliminated earlier in this same pass
-            if iteration >= config.MAX_OPTIMIZE_ITERATIONS:
+            if iteration >= effective_max_iterations:
+                hit_cap = True
                 break
 
             trial_excluded = [*best_excluded, var]
@@ -411,12 +435,22 @@ def optimize_variables(
                 history.append(
                     {"iteration": iteration, "removed_col": var, "rmsep": trial_rmsep}
                 )
+                if iteration >= effective_max_iterations:
+                    hit_cap = True
+                    break
 
+        if hit_cap:
+            stop_reason = (
+                "max_iterations" if capped_by_safety_net else "too_few_variables"
+            )
+            break
         if not eliminated_in_pass:
+            stop_reason = "converged"
             break
 
     return {
         "history": history,
         "final_excluded_cols": best_excluded,
         "results": best_result,
+        "stop_reason": stop_reason,
     }

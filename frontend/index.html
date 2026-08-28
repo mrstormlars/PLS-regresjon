@@ -136,6 +136,7 @@
 
     <div id="optimize-section">
       <h3>Automatisk variabeloptimalisering</h3>
+      <p>Trinn 1: kjør optimaliseringen. Forslaget markerer variabler i koeffisientplottet over, men endrer ingenting automatisk.</p>
       <p>
         <label for="optimize-tolerance-input">Toleranse for RMSEP-økning:</label>
         <input type="number" id="optimize-tolerance-input" step="any" value="0" />
@@ -143,6 +144,8 @@
       </p>
       <p id="optimize-status" class="status"></p>
       <div id="optimize-history-chart" class="plot hidden"></div>
+      <div id="optimize-summary"></div>
+      <p>Trinn 2: bruk forslaget for å fjerne de markerte variablene og oppdatere resultatene.</p>
       <button id="apply-optimized-button" class="hidden">Bruk optimalisert utvalg</button>
     </div>
   </section>

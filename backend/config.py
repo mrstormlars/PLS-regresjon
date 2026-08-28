@@ -43,8 +43,11 @@ DEFAULT_HEADER_ROW = 1
 UPLOAD_TTL_SECONDS = 3600
 
 # optimize_variables: default absolute RMSEP tolerance allowed when testing
-# whether a variable can be permanently excluded (0.0 = no tolerance), and a
-# hard cap on the number of variables it will remove (safety bound against
-# runaway loops; not present in the original notebook).
+# whether a variable can be permanently excluded (0.0 = no tolerance).
 OPTIMIZE_TOLERANCE_DEFAULT = 0.0
+
+# optimize_variables is primarily bounded by the number of available
+# X-variables minus one (the natural limit - you cannot remove more). This
+# is a secondary safety net only, for pathologically large variable counts;
+# hitting it is reported via stop_reason == "max_iterations", never silent.
 MAX_OPTIMIZE_ITERATIONS = 50
