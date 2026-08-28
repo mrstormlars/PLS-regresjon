@@ -8,6 +8,7 @@ venv/
 
 # Uploaded user data — never commit datasets
 uploads/
+Inbox/
 *.xlsx
 *.csv
 !tests/fixtures/*.xlsx
