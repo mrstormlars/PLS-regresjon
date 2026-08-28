@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="no">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PLS-regresjon</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <h1>PLS-regresjonsanalyse</h1>
+
+  <section id="upload-section">
+    <h2>1. Last opp datasett</h2>
+    <input type="file" id="file-input" accept=".xlsx,.csv" />
+    <button id="upload-button">Last opp</button>
+    <p id="upload-status" class="status"></p>
+  </section>
+
+  <section id="sheet-section" class="hidden">
+    <h2>2. Velg ark og rader</h2>
+    <label for="sheet-select">Ark:</label>
+    <select id="sheet-select"></select>
+
+    <label for="header-row-input">Header-rad (0-indeksert):</label>
+    <input type="number" id="header-row-input" value="0" min="0" />
+
+    <label for="start-row-input">Startrad (valgfritt):</label>
+    <input type="number" id="start-row-input" min="0" />
+
+    <label for="end-row-input">Sluttrad (valgfritt):</label>
+    <input type="number" id="end-row-input" min="0" />
+
+    <button id="preview-button">Forhåndsvis</button>
+    <p id="preview-status" class="status"></p>
+  </section>
+
+  <section id="preview-section" class="hidden">
+    <h2>3. Forhåndsvisning</h2>
+    <div id="preview-table-container"></div>
+  </section>
+
+  <section id="config-section" class="hidden">
+    <h2>4. Velg variabler og innstillinger</h2>
+
+    <label for="y-col-select">Y-variabel (respons):</label>
+    <select id="y-col-select"></select>
+
+    <fieldset id="x-cols-fieldset">
+      <legend>X-variabler (prediktorer)</legend>
+      <div id="x-cols-container"></div>
+    </fieldset>
+
+    <fieldset id="limits-fieldset">
+      <legend>Grenseverdier per kolonne (valgfritt)</legend>
+      <div id="limits-container"></div>
+    </fieldset>
+
+    <label>
+      <input type="checkbox" id="log-y-checkbox" />
+      Bruk log10 av Y-variabelen
+    </label>
+
+    <label for="max-components-input">Maks antall komponenter:</label>
+    <input type="number" id="max-components-input" value="10" min="1" />
+
+    <label for="cv-folds-input">Antall CV-folder:</label>
+    <input type="number" id="cv-folds-input" value="10" min="2" />
+
+    <label for="excluded-rows-input">Ekskluderte rader (kommaseparerte radindekser):</label>
+    <input type="text" id="excluded-rows-input" placeholder="f.eks. 3, 17, 42" />
+
+    <button id="analyze-button">Kjør analyse</button>
+    <p id="analyze-status" class="status"></p>
+  </section>
+
+  <section id="results-section" class="hidden">
+    <h2>5. Resultater</h2>
+
+    <div id="key-figures"></div>
+
+    <h3>RMSEP/RMSEC vs. antall komponenter</h3>
+    <canvas id="rmse-chart" width="600" height="300"></canvas>
+
+    <h3>Predikert vs. faktisk Y</h3>
+    <canvas id="predicted-actual-chart" width="600" height="300"></canvas>
+
+    <h3>Scores (PC1 vs. PC2)</h3>
+    <canvas id="scores-chart" width="600" height="300"></canvas>
+
+    <h3>Koeffisienter</h3>
+    <canvas id="coefficients-chart" width="600" height="400"></canvas>
+
+    <p id="selected-row-info" class="status"></p>
+  </section>
+
+  <script src="vendor/chart.umd.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
