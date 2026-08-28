@@ -148,15 +148,21 @@ def run_analysis(
     excluded_rows: list[int] | None = None,
     limits: dict[str, dict[str, float]] | None = None,
     log_y: bool = False,
+    log_x_cols: list[str] | None = None,
     max_components: int = config.MAX_COMPONENTS_DEFAULT,
     cv_folds: int = config.CV_FOLDS_DEFAULT,
 ) -> dict:
     """Run the full PLS analysis pipeline on an already range-extracted DataFrame.
 
     Pipeline: drop excluded rows/columns -> limit filter -> optional log10(Y)
-    -> coerce numeric, inf -> NaN, drop incomplete rows -> standardize
-    (mean/std) -> PLS sweep 1..max_components with KFold CV -> pick optimal
-    component count by minimum RMSEP -> fit optimal model -> diagnostics.
+    and log10(selected X columns) -> coerce numeric, inf -> NaN, drop
+    incomplete rows -> standardize (mean/std) -> PLS sweep 1..max_components
+    with KFold CV -> pick optimal component count by minimum RMSEP -> fit
+    optimal model -> diagnostics.
+
+    Non-positive values in a log10'd column become NaN and are dropped by
+    the existing incomplete-row handling; if that pushes the valid row count
+    below config.MIN_VALID_ROWS, the existing ValidationError below applies.
 
     Raises ValidationError (Norwegian message) if Y is not numeric or if
     fewer than config.MIN_VALID_ROWS complete rows remain.
@@ -164,6 +170,7 @@ def run_analysis(
     excluded_cols = excluded_cols or []
     excluded_rows = excluded_rows or []
     limits = limits or {}
+    log_x_cols = log_x_cols or []
 
     if y_col not in df.columns:
         raise ValidationError(f"Kolonnen '{y_col}' finnes ikke i datasettet.")
@@ -183,6 +190,11 @@ def run_analysis(
 
     x_cols = [c for c in working.columns if c != y_col]
     X = working[x_cols].apply(pd.to_numeric, errors="coerce")
+    if log_x_cols:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            for col in log_x_cols:
+                if col in X.columns:
+                    X[col] = np.log10(X[col])
     X = X.replace([np.inf, -np.inf], np.nan)
     y = y_numeric.replace([np.inf, -np.inf], np.nan)
 

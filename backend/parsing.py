@@ -94,29 +94,92 @@ def list_sheets(filename: str, content: bytes) -> list[str]:
     return list(workbook.sheet_names)
 
 
+def _read_raw(filename: str, content: bytes, sheet: str) -> pd.DataFrame:
+    """Read a sheet/csv with no header, purely to count its raw rows."""
+    extension = Path(filename).suffix.lower()
+    if extension == ".csv":
+        return pd.read_csv(BytesIO(content), header=None)
+    return pd.read_excel(BytesIO(content), sheet_name=sheet, header=None)
+
+
 def read_sheet(
     filename: str, content: bytes, sheet: str, header_row: int
 ) -> pd.DataFrame:
     """Read a sheet (xlsx) or the csv content into a DataFrame.
 
-    Raises ValidationError if the requested sheet does not exist.
+    header_row is a 1-based Excel row number (row 1 is the first row of the
+    sheet), matching what users see in Excel.
+
+    Raises ValidationError if the requested sheet does not exist, or if
+    header_row is not a valid row number within the sheet.
     """
     extension = Path(filename).suffix.lower()
     if extension == ".csv":
         if sheet != CSV_SHEET_NAME:
             raise ValidationError(f"Ukjent ark: '{sheet}'.")
-        return pd.read_csv(BytesIO(content), header=header_row)
+    else:
+        available_sheets = list_sheets(filename, content)
+        if sheet not in available_sheets:
+            raise ValidationError(f"Ukjent ark: '{sheet}'.")
 
-    available_sheets = list_sheets(filename, content)
-    if sheet not in available_sheets:
-        raise ValidationError(f"Ukjent ark: '{sheet}'.")
-    return pd.read_excel(BytesIO(content), sheet_name=sheet, header=header_row)
+    if header_row < 1:
+        raise ValidationError("Header-rad må være et Excel-radnummer (1 eller høyere).")
+
+    total_rows = len(_read_raw(filename, content, sheet))
+    if header_row > total_rows:
+        raise ValidationError(
+            f"Header-rad {header_row} finnes ikke i arket (arket har kun "
+            f"{total_rows} rader)."
+        )
+
+    pandas_header = header_row - 1
+    if extension == ".csv":
+        return pd.read_csv(BytesIO(content), header=pandas_header)
+    return pd.read_excel(BytesIO(content), sheet_name=sheet, header=pandas_header)
+
+
+def select_columns(
+    df: pd.DataFrame, start_col: int | None, end_col: int | None
+) -> pd.DataFrame:
+    """Select a 1-based, inclusive column range (Excel-style: A=1, B=2, ...).
+
+    Raises ValidationError if start_col is after end_col.
+    """
+    if start_col is None and end_col is None:
+        return df
+    n_cols = df.shape[1]
+    start = start_col if start_col is not None else 1
+    end = end_col if end_col is not None else n_cols
+    if start > end:
+        raise ValidationError("Startkolonne kan ikke være etter sluttkolonne.")
+    start = max(start, 1)
+    end = min(end, n_cols)
+    return df.iloc[:, start - 1 : end]
 
 
 def extract_range(
-    df: pd.DataFrame, start_row: int | None, end_row: int | None
+    df: pd.DataFrame, header_row: int, start_row: int | None, end_row: int | None
 ) -> pd.DataFrame:
-    """Slice a DataFrame to the given row range (0-indexed, inclusive), reset index."""
-    start = start_row if start_row is not None else 0
-    end = end_row if end_row is not None else len(df) - 1
-    return df.iloc[start : end + 1].reset_index(drop=True)
+    """Slice a DataFrame to the given row range.
+
+    start_row/end_row are 1-based, inclusive Excel row numbers (matching
+    header_row's numbering). The returned DataFrame's index is relabeled to
+    the corresponding Excel row numbers, so downstream row_index values and
+    excluded_rows stay in the same numbering the user sees in Excel.
+    """
+    first_data_row = header_row + 1
+    last_data_row = header_row + len(df)
+
+    start = max(start_row if start_row is not None else first_data_row, first_data_row)
+    end = min(end_row if end_row is not None else last_data_row, last_data_row)
+
+    if end < start:
+        sliced = df.iloc[0:0].copy()
+        sliced.index = range(0)
+        return sliced
+
+    position_start = start - first_data_row
+    position_end = end - first_data_row
+    sliced = df.iloc[position_start : position_end + 1].copy()
+    sliced.index = range(start, start + len(sliced))
+    return sliced

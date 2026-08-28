@@ -5,6 +5,7 @@ const state = {
   fileId: null,
   sheets: [],
   columns: [],
+  yCol: null,
   charts: {},
 };
 
@@ -31,6 +32,23 @@ async function postJson(url, body) {
     throw new Error(data.detail || "Ukjent feil fra serveren.");
   }
   return data;
+}
+
+// Converts an Excel-style column reference ("A", "b", "AA", or a plain
+// number like "3") to a 1-based column index. Returns null for empty input.
+function parseColumnInput(raw) {
+  const value = raw.trim();
+  if (!value) return null;
+  if (/^\d+$/.test(value)) {
+    return parseInt(value, 10);
+  }
+  const letters = value.toUpperCase();
+  if (!/^[A-Z]+$/.test(letters)) return null;
+  let index = 0;
+  for (const ch of letters) {
+    index = index * 26 + (ch.charCodeAt(0) - "A".charCodeAt(0) + 1);
+  }
+  return index;
 }
 
 el("upload-button").addEventListener("click", async () => {
@@ -70,7 +88,9 @@ el("upload-button").addEventListener("click", async () => {
 
 el("preview-button").addEventListener("click", async () => {
   const sheet = el("sheet-select").value;
-  const headerRow = parseInt(el("header-row-input").value, 10) || 0;
+  const headerRow = parseInt(el("header-row-input").value, 10) || 1;
+  const startCol = parseColumnInput(el("start-col-input").value);
+  const endCol = parseColumnInput(el("end-col-input").value);
 
   setStatus("preview-status", "Henter forhåndsvisning...");
   try {
@@ -78,6 +98,8 @@ el("preview-button").addEventListener("click", async () => {
       file_id: state.fileId,
       sheet,
       header_row: headerRow,
+      start_col: startCol,
+      end_col: endCol,
     });
     state.columns = data.columns;
     renderPreviewTable(data.columns, data.rows);
@@ -96,6 +118,9 @@ function renderPreviewTable(columns, rows) {
 
   const thead = document.createElement("thead");
   const headRow = document.createElement("tr");
+  const radTh = document.createElement("th");
+  radTh.textContent = "Rad";
+  headRow.appendChild(radTh);
   for (const col of columns) {
     const th = document.createElement("th");
     th.textContent = col;
@@ -107,6 +132,9 @@ function renderPreviewTable(columns, rows) {
   const tbody = document.createElement("tbody");
   for (const row of rows) {
     const tr = document.createElement("tr");
+    const radTd = document.createElement("td");
+    radTd.textContent = row.row_index;
+    tr.appendChild(radTd);
     for (const col of columns) {
       const td = document.createElement("td");
       const value = row[col];
@@ -119,6 +147,22 @@ function renderPreviewTable(columns, rows) {
 
   container.innerHTML = "";
   container.appendChild(table);
+}
+
+// Finds a row element for a given column among elements carrying the given
+// class, matched via the data-column attribute (avoids CSS-selector escaping
+// issues for column names with special characters).
+function findColumnRow(className, column) {
+  const rows = document.querySelectorAll(`.${className}`);
+  for (const row of rows) {
+    if (row.dataset.column === column) return row;
+  }
+  return null;
+}
+
+function setColumnRowHidden(className, column, hidden) {
+  const row = findColumnRow(className, column);
+  if (row) row.classList.toggle("hidden-row", hidden);
 }
 
 function populateColumnControls(columns) {
@@ -134,15 +178,33 @@ function populateColumnControls(columns) {
   const xContainer = el("x-cols-container");
   xContainer.innerHTML = "";
   for (const col of columns) {
-    const label = document.createElement("label");
+    const row = document.createElement("div");
+    row.className = "x-col-row";
+    row.dataset.column = col;
+
+    const checkboxLabel = document.createElement("label");
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
     checkbox.value = col;
     checkbox.checked = true;
     checkbox.className = "x-col-checkbox";
-    label.appendChild(checkbox);
-    label.appendChild(document.createTextNode(col));
-    xContainer.appendChild(label);
+    checkbox.addEventListener("change", () => {
+      setColumnRowHidden("limit-row", col, !checkbox.checked);
+    });
+    checkboxLabel.appendChild(checkbox);
+    checkboxLabel.appendChild(document.createTextNode(col));
+
+    const logLabel = document.createElement("label");
+    const logCheckbox = document.createElement("input");
+    logCheckbox.type = "checkbox";
+    logCheckbox.className = "log-x-checkbox";
+    logCheckbox.dataset.column = col;
+    logLabel.appendChild(logCheckbox);
+    logLabel.appendChild(document.createTextNode("log10"));
+
+    row.appendChild(checkboxLabel);
+    row.appendChild(logLabel);
+    xContainer.appendChild(row);
   }
 
   const limitsContainer = el("limits-container");
@@ -150,6 +212,7 @@ function populateColumnControls(columns) {
   for (const col of columns) {
     const row = document.createElement("div");
     row.className = "limit-row";
+    row.dataset.column = col;
 
     const label = document.createElement("label");
     label.textContent = col;
@@ -171,7 +234,29 @@ function populateColumnControls(columns) {
     row.appendChild(highInput);
     limitsContainer.appendChild(row);
   }
+
+  // The first column defaults as Y; hide it from the X list/limits from the start.
+  state.yCol = columns.length ? columns[0] : null;
+  if (state.yCol) {
+    setColumnRowHidden("x-col-row", state.yCol, true);
+    setColumnRowHidden("limit-row", state.yCol, true);
+  }
 }
+
+// Selecting a new Y column restores the previous Y column to the X list and
+// hides the newly selected one. Unaffected columns' checked/limit state is
+// untouched (rows are hidden via CSS, never removed/recreated).
+el("y-col-select").addEventListener("change", () => {
+  const newY = el("y-col-select").value;
+  const oldY = state.yCol;
+  if (oldY && oldY !== newY) {
+    setColumnRowHidden("x-col-row", oldY, false);
+    setColumnRowHidden("limit-row", oldY, false);
+  }
+  setColumnRowHidden("x-col-row", newY, true);
+  setColumnRowHidden("limit-row", newY, true);
+  state.yCol = newY;
+});
 
 function collectExcludedCols() {
   const yCol = el("y-col-select").value;
@@ -183,6 +268,18 @@ function collectExcludedCols() {
     }
   }
   return excluded;
+}
+
+function collectLogXCols() {
+  const yCol = el("y-col-select").value;
+  const checkboxes = document.querySelectorAll(".log-x-checkbox");
+  const logCols = [];
+  for (const checkbox of checkboxes) {
+    if (checkbox.checked && checkbox.dataset.column !== yCol) {
+      logCols.push(checkbox.dataset.column);
+    }
+  }
+  return logCols;
 }
 
 function collectLimits() {
@@ -215,9 +312,11 @@ function collectExcludedRows() {
 
 el("analyze-button").addEventListener("click", async () => {
   const sheet = el("sheet-select").value;
-  const headerRow = parseInt(el("header-row-input").value, 10) || 0;
+  const headerRow = parseInt(el("header-row-input").value, 10) || 1;
   const startRowRaw = el("start-row-input").value;
   const endRowRaw = el("end-row-input").value;
+  const startCol = parseColumnInput(el("start-col-input").value);
+  const endCol = parseColumnInput(el("end-col-input").value);
 
   const payload = {
     file_id: state.fileId,
@@ -225,11 +324,14 @@ el("analyze-button").addEventListener("click", async () => {
     header_row: headerRow,
     start_row: startRowRaw === "" ? null : parseInt(startRowRaw, 10),
     end_row: endRowRaw === "" ? null : parseInt(endRowRaw, 10),
+    start_col: startCol,
+    end_col: endCol,
     y_col: el("y-col-select").value,
     excluded_cols: collectExcludedCols(),
     excluded_rows: collectExcludedRows(),
     limits: collectLimits(),
     log_y: el("log-y-checkbox").checked,
+    log_x_cols: collectLogXCols(),
     max_components: parseInt(el("max-components-input").value, 10),
     cv_folds: parseInt(el("cv-folds-input").value, 10),
   };

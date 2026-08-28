@@ -57,19 +57,63 @@ def test_get_upload_unknown_file_id_raises():
 def test_read_sheet_unknown_sheet_raises():
     content = _read_bytes("sample.xlsx")
     with pytest.raises(parsing.ValidationError):
-        parsing.read_sheet("sample.xlsx", content, "NoSuchSheet", header_row=0)
+        parsing.read_sheet("sample.xlsx", content, "NoSuchSheet", header_row=1)
 
 
 def test_read_sheet_returns_expected_columns():
     content = _read_bytes("sample.xlsx")
-    df = parsing.read_sheet("sample.xlsx", content, "Data1", header_row=0)
+    df = parsing.read_sheet("sample.xlsx", content, "Data1", header_row=1)
     assert list(df.columns) == ["Tid", "X1", "X2", "Y"]
     assert len(df) == 12
 
 
-def test_extract_range_slices_inclusive():
+def test_read_sheet_header_row_zero_raises():
     content = _read_bytes("sample.xlsx")
-    df = parsing.read_sheet("sample.xlsx", content, "Data1", header_row=0)
-    sliced = parsing.extract_range(df, start_row=2, end_row=4)
+    with pytest.raises(parsing.ValidationError, match="Excel-radnummer"):
+        parsing.read_sheet("sample.xlsx", content, "Data1", header_row=0)
+
+
+def test_read_sheet_header_row_beyond_sheet_raises():
+    content = _read_bytes("sample.xlsx")
+    with pytest.raises(parsing.ValidationError, match="finnes ikke i arket"):
+        parsing.read_sheet("sample.xlsx", content, "Data1", header_row=999)
+
+
+def test_read_sheet_with_header_on_excel_row_three():
+    content = _read_bytes("sample_header_row3.xlsx")
+    df = parsing.read_sheet("sample_header_row3.xlsx", content, "Data1", header_row=3)
+    assert list(df.columns) == ["Tid", "X1", "X2", "Y"]
+    assert df.iloc[0]["Tid"] == 1
+    assert len(df) == 12
+
+
+def test_extract_range_slices_inclusive_and_labels_excel_row_numbers():
+    content = _read_bytes("sample.xlsx")
+    df = parsing.read_sheet("sample.xlsx", content, "Data1", header_row=1)
+    # header on Excel row 1 -> first data row is Excel row 2
+    sliced = parsing.extract_range(df, header_row=1, start_row=3, end_row=5)
     assert len(sliced) == 3
-    assert sliced["Tid"].tolist() == [3, 4, 5]
+    assert sliced["Tid"].tolist() == [2, 3, 4]
+    assert sliced.index.tolist() == [3, 4, 5]
+
+
+def test_extract_range_with_header_on_row_three():
+    content = _read_bytes("sample_header_row3.xlsx")
+    df = parsing.read_sheet("sample_header_row3.xlsx", content, "Data1", header_row=3)
+    sliced = parsing.extract_range(df, header_row=3, start_row=5, end_row=6)
+    assert sliced.index.tolist() == [5, 6]
+    assert sliced["Tid"].tolist() == [2, 3]
+
+
+def test_select_columns_returns_subset():
+    content = _read_bytes("sample.xlsx")
+    df = parsing.read_sheet("sample.xlsx", content, "Data1", header_row=1)
+    subset = parsing.select_columns(df, start_col=2, end_col=3)
+    assert list(subset.columns) == ["X1", "X2"]
+
+
+def test_select_columns_start_after_end_raises():
+    content = _read_bytes("sample.xlsx")
+    df = parsing.read_sheet("sample.xlsx", content, "Data1", header_row=1)
+    with pytest.raises(parsing.ValidationError, match="Startkolonne"):
+        parsing.select_columns(df, start_col=3, end_col=2)
