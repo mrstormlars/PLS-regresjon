@@ -1,12 +1,27 @@
 // PLS-regresjon frontend: upload -> sheet/range selection -> preview -> configure -> analyze -> results.
 // Norwegian text is used for all user-visible strings; identifiers/comments are English.
 
+const PLOTLY_CONFIG = { responsive: true, displaylogo: false };
+const SELECTION_COLOR = "#e6308a";
+
 const state = {
   fileId: null,
   sheets: [],
   columns: [],
   yCol: null,
-  charts: {},
+  // Domain selections shared across all plots of that domain (rows: scores +
+  // predicted-vs-actual; columns: coefficients). Row values are Excel row
+  // numbers; column values are X-variable names.
+  selectedRows: new Set(),
+  selectedCols: new Set(),
+  // Per-plot metadata needed to restyle marker colors when the selection
+  // changes: customData[traceIndex] maps each point to its row/column
+  // identifier, baseColors[traceIndex] is either a single color or a
+  // per-point color array.
+  plotMeta: {},
+  lastAnalyzePayload: null,
+  lastAnalyzeResult: null,
+  lastOptimizeResult: null,
 };
 
 const el = (id) => document.getElementById(id);
@@ -310,7 +325,7 @@ function collectExcludedRows() {
     .filter((n) => !Number.isNaN(n));
 }
 
-el("analyze-button").addEventListener("click", async () => {
+function buildAnalyzePayload() {
   const sheet = el("sheet-select").value;
   const headerRow = parseInt(el("header-row-input").value, 10) || 1;
   const startRowRaw = el("start-row-input").value;
@@ -318,7 +333,7 @@ el("analyze-button").addEventListener("click", async () => {
   const startCol = parseColumnInput(el("start-col-input").value);
   const endCol = parseColumnInput(el("end-col-input").value);
 
-  const payload = {
+  return {
     file_id: state.fileId,
     sheet,
     header_row: headerRow,
@@ -335,10 +350,14 @@ el("analyze-button").addEventListener("click", async () => {
     max_components: parseInt(el("max-components-input").value, 10),
     cv_folds: parseInt(el("cv-folds-input").value, 10),
   };
+}
 
+el("analyze-button").addEventListener("click", async () => {
+  const payload = buildAnalyzePayload();
   setStatus("analyze-status", "Kjører analyse...");
   try {
     const result = await postJson("/api/analyze", payload);
+    state.lastAnalyzePayload = payload;
     renderResults(result);
     setStatus("analyze-status", "Analyse fullført.");
     showSection("results-section");
@@ -347,19 +366,349 @@ el("analyze-button").addEventListener("click", async () => {
   }
 });
 
-function destroyChart(name) {
-  if (state.charts[name]) {
-    state.charts[name].destroy();
-    delete state.charts[name];
+// ---------------------------------------------------------------------------
+// Linked selection: clicking/box-selecting a point in one plot of a domain
+// (rows or columns) highlights the same points in every plot of that domain.
+// ---------------------------------------------------------------------------
+
+function toggleOrSetSelection(selectionSet, value, domEvent) {
+  const isMultiSelect = domEvent && (domEvent.ctrlKey || domEvent.metaKey);
+  if (isMultiSelect) {
+    if (selectionSet.has(value)) {
+      selectionSet.delete(value);
+    } else {
+      selectionSet.add(value);
+    }
+  } else {
+    selectionSet.clear();
+    selectionSet.add(value);
   }
 }
 
+function applySelectionStyling(plotId, selectionSet) {
+  const meta = state.plotMeta[plotId];
+  if (!meta) return;
+  const colorsPerTrace = meta.customData.map((customArray, traceIndex) => {
+    const base = meta.baseColors[traceIndex];
+    return customArray.map((value, i) =>
+      selectionSet.has(value) ? SELECTION_COLOR : Array.isArray(base) ? base[i] : base
+    );
+  });
+  // Target only the traces listed in meta (e.g. skips a non-selectable
+  // reference line trace) so restyle never sends a mismatched-length color
+  // array to a trace it doesn't describe.
+  const traceIndices = meta.customData.map((_, i) => i);
+  Plotly.restyle(plotId, { "marker.color": colorsPerTrace }, traceIndices);
+}
+
+function updateSelectionSummary() {
+  const rows = [...state.selectedRows].sort((a, b) => a - b);
+  const cols = [...state.selectedCols];
+  el("row-selection-summary").textContent = rows.length
+    ? `Markerte rader (Excel-radnumre): ${rows.join(", ")}`
+    : "Ingen rader markert.";
+  el("col-selection-summary").textContent = cols.length
+    ? `Markerte kolonner: ${cols.join(", ")}`
+    : "Ingen kolonner markert.";
+
+  const hasSelection = rows.length > 0 || cols.length > 0;
+  el("rerun-without-selected-button").disabled = !hasSelection;
+  el("rerun-only-selected-button").disabled = !hasSelection;
+}
+
+function refreshRowSelection() {
+  applySelectionStyling("predicted-actual-chart", state.selectedRows);
+  applySelectionStyling("scores-chart", state.selectedRows);
+  updateSelectionSummary();
+}
+
+function refreshColSelection() {
+  applySelectionStyling("coefficients-chart", state.selectedCols);
+  updateSelectionSummary();
+}
+
+function handleRowPointClick(eventData) {
+  if (!eventData.points || !eventData.points.length) return;
+  const rowIndex = eventData.points[0].customdata;
+  if (rowIndex === undefined || rowIndex === null) return; // e.g. the reference line
+  toggleOrSetSelection(state.selectedRows, rowIndex, eventData.event);
+  refreshRowSelection();
+}
+
+function handleRowBoxSelect(eventData) {
+  state.selectedRows.clear();
+  if (eventData && eventData.points) {
+    for (const point of eventData.points) {
+      if (point.customdata !== undefined && point.customdata !== null) {
+        state.selectedRows.add(point.customdata);
+      }
+    }
+  }
+  refreshRowSelection();
+}
+
+function handleColPointClick(eventData) {
+  if (!eventData.points || !eventData.points.length) return;
+  const col = eventData.points[0].x;
+  toggleOrSetSelection(state.selectedCols, col, eventData.event);
+  refreshColSelection();
+}
+
+function handleColBoxSelect(eventData) {
+  state.selectedCols.clear();
+  if (eventData && eventData.points) {
+    for (const point of eventData.points) {
+      state.selectedCols.add(point.x);
+    }
+  }
+  refreshColSelection();
+}
+
+function bindRowSelectionEvents(plotId) {
+  const gd = el(plotId);
+  gd.on("plotly_click", handleRowPointClick);
+  gd.on("plotly_selected", handleRowBoxSelect);
+}
+
+function bindColSelectionEvents(plotId) {
+  const gd = el(plotId);
+  gd.on("plotly_click", handleColPointClick);
+  gd.on("plotly_selected", handleColBoxSelect);
+}
+
+el("clear-selection-button").addEventListener("click", () => {
+  state.selectedRows.clear();
+  state.selectedCols.clear();
+  refreshRowSelection();
+  refreshColSelection();
+});
+
+// ---------------------------------------------------------------------------
+// Re-run with/without the current selection, preserving all other settings.
+// ---------------------------------------------------------------------------
+
+function getAllRowIndices() {
+  if (!state.lastAnalyzeResult) return [];
+  return state.lastAnalyzeResult.diagnostics.map((d) => d.row_index);
+}
+
+function getAllXCols() {
+  if (!state.lastAnalyzeResult) return [];
+  return Object.keys(state.lastAnalyzeResult.coefficients);
+}
+
+async function rerunAnalysis(mode) {
+  if (!state.lastAnalyzePayload) return;
+  const payload = { ...state.lastAnalyzePayload };
+  const excludedRows = new Set(payload.excluded_rows || []);
+  const excludedCols = new Set(payload.excluded_cols || []);
+  const selectedRows = [...state.selectedRows];
+  const selectedCols = [...state.selectedCols];
+
+  if (mode === "without-selected") {
+    for (const row of selectedRows) excludedRows.add(row);
+    for (const col of selectedCols) excludedCols.add(col);
+  } else if (mode === "only-selected") {
+    if (selectedRows.length) {
+      const keep = new Set(selectedRows);
+      for (const row of getAllRowIndices()) {
+        if (!keep.has(row)) excludedRows.add(row);
+      }
+    }
+    if (selectedCols.length) {
+      const keep = new Set(selectedCols);
+      for (const col of getAllXCols()) {
+        if (!keep.has(col)) excludedCols.add(col);
+      }
+    }
+  }
+
+  payload.excluded_rows = [...excludedRows];
+  payload.excluded_cols = [...excludedCols];
+
+  setStatus("analyze-status", "Kjører analyse på nytt...");
+  try {
+    const result = await postJson("/api/analyze", payload);
+    state.lastAnalyzePayload = payload;
+    el("excluded-rows-input").value = payload.excluded_rows.join(", ");
+    for (const checkbox of document.querySelectorAll(".x-col-checkbox")) {
+      if (payload.excluded_cols.includes(checkbox.value)) {
+        checkbox.checked = false;
+        setColumnRowHidden("limit-row", checkbox.value, true);
+      }
+    }
+    renderResults(result);
+    setStatus("analyze-status", "Analyse fullført.");
+  } catch (err) {
+    setStatus("analyze-status", err.message, true);
+  }
+}
+
+el("rerun-without-selected-button").addEventListener("click", () => rerunAnalysis("without-selected"));
+el("rerun-only-selected-button").addEventListener("click", () => rerunAnalysis("only-selected"));
+
+// ---------------------------------------------------------------------------
+// Outlier / low-impact-variable suggestions: pre-select the returned
+// rows/columns so the re-run buttons above can act on them.
+// ---------------------------------------------------------------------------
+
+el("suggest-outliers-button").addEventListener("click", async () => {
+  if (!state.lastAnalyzeResult) {
+    setStatus("suggestion-status", "Kjør en analyse først.", true);
+    return;
+  }
+  const method = el("suggest-outlier-method-select").value;
+  const thresholdRaw = el("suggest-outlier-threshold-input").value;
+  const threshold = thresholdRaw === "" ? null : parseFloat(thresholdRaw);
+
+  setStatus("suggestion-status", "Henter forslag...");
+  try {
+    const data = await postJson("/api/suggest-outliers", {
+      diagnostics: state.lastAnalyzeResult.diagnostics,
+      method,
+      threshold,
+    });
+    state.selectedRows.clear();
+    for (const rowIndex of data.row_indices) state.selectedRows.add(rowIndex);
+    refreshRowSelection();
+    setStatus(
+      "suggestion-status",
+      `${data.row_indices.length} rad(er) foreslått som uteliggere og markert.`
+    );
+  } catch (err) {
+    setStatus("suggestion-status", err.message, true);
+  }
+});
+
+el("suggest-low-impact-button").addEventListener("click", async () => {
+  if (!state.lastAnalyzeResult) {
+    setStatus("suggestion-status", "Kjør en analyse først.", true);
+    return;
+  }
+  const thresholdRaw = el("suggest-low-impact-threshold-input").value;
+  const threshold = thresholdRaw === "" ? null : parseFloat(thresholdRaw);
+  const coefficients = Object.entries(state.lastAnalyzeResult.coefficients).map(
+    ([variable, coefficient]) => ({ variable, coefficient })
+  );
+
+  setStatus("suggestion-status", "Henter forslag...");
+  try {
+    const data = await postJson("/api/suggest-low-impact", { coefficients, threshold });
+    state.selectedCols.clear();
+    for (const col of data.columns) state.selectedCols.add(col);
+    refreshColSelection();
+    setStatus(
+      "suggestion-status",
+      `${data.columns.length} variabel/variabler med lav påvirkning foreslått og markert.`
+    );
+  } catch (err) {
+    setStatus("suggestion-status", err.message, true);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Automatic variable optimization.
+// ---------------------------------------------------------------------------
+
+el("optimize-button").addEventListener("click", async () => {
+  if (!state.lastAnalyzePayload) {
+    setStatus("optimize-status", "Kjør en analyse først.", true);
+    return;
+  }
+  const toleranceRaw = el("optimize-tolerance-input").value;
+  const tolerance = toleranceRaw === "" ? 0 : parseFloat(toleranceRaw);
+  const payload = { ...state.lastAnalyzePayload, tolerance };
+
+  const button = el("optimize-button");
+  button.disabled = true;
+  setStatus("optimize-status", "Optimaliserer variabler ...");
+  try {
+    const data = await postJson("/api/optimize", payload);
+    state.lastOptimizeResult = data;
+    renderOptimizeHistory(data);
+    if (data.final_excluded_cols.length) {
+      setStatus(
+        "optimize-status",
+        `Optimalisering fullført: ${data.final_excluded_cols.length} variabel/variabler kan fjernes.`
+      );
+      el("apply-optimized-button").classList.remove("hidden");
+    } else {
+      setStatus(
+        "optimize-status",
+        "Optimalisering fullført: ingen variabler kunne fjernes innenfor toleransen."
+      );
+      el("apply-optimized-button").classList.add("hidden");
+    }
+  } catch (err) {
+    setStatus("optimize-status", err.message, true);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+function renderOptimizeHistory(data) {
+  const container = el("optimize-history-chart");
+  if (!data.history.length) {
+    container.classList.add("hidden");
+    return;
+  }
+  container.classList.remove("hidden");
+  Plotly.newPlot(
+    container,
+    [
+      {
+        x: data.history.map((h) => h.iteration),
+        y: data.history.map((h) => h.rmsep),
+        mode: "lines+markers",
+        type: "scatter",
+        text: data.history.map((h) => h.removed_col),
+        hovertemplate: "Iterasjon %{x}<br>Fjernet: %{text}<br>RMSEP: %{y:.4f}<extra></extra>",
+      },
+    ],
+    {
+      title: "RMSEP per iterasjon (variabeloptimalisering)",
+      xaxis: { title: "Iterasjon", dtick: 1 },
+      yaxis: { title: "RMSEP" },
+    },
+    PLOTLY_CONFIG
+  );
+}
+
+el("apply-optimized-button").addEventListener("click", () => {
+  if (!state.lastOptimizeResult) return;
+  const finalExcluded = state.lastOptimizeResult.final_excluded_cols;
+
+  for (const checkbox of document.querySelectorAll(".x-col-checkbox")) {
+    if (finalExcluded.includes(checkbox.value)) {
+      checkbox.checked = false;
+      setColumnRowHidden("limit-row", checkbox.value, true);
+    }
+  }
+
+  state.lastAnalyzePayload = { ...state.lastAnalyzePayload, excluded_cols: finalExcluded };
+  renderResults(state.lastOptimizeResult.results);
+  setStatus("optimize-status", "Optimalisert utvalg er brukt på resultatene.");
+});
+
+// ---------------------------------------------------------------------------
+// Result rendering (Plotly).
+// ---------------------------------------------------------------------------
+
 function renderResults(result) {
+  state.lastAnalyzeResult = result;
+  state.selectedRows.clear();
+  state.selectedCols.clear();
+
   renderKeyFigures(result);
   renderRmseChart(result);
   renderPredictedActualChart(result);
   renderScoresChart(result);
   renderCoefficientsChart(result);
+
+  refreshRowSelection();
+  refreshColSelection();
+  el("optimize-history-chart").classList.add("hidden");
+  el("apply-optimized-button").classList.add("hidden");
 }
 
 function renderKeyFigures(result) {
@@ -383,118 +732,165 @@ function renderKeyFigures(result) {
 }
 
 function renderRmseChart(result) {
-  destroyChart("rmse");
-  const ctx = el("rmse-chart").getContext("2d");
-  state.charts.rmse = new Chart(ctx, {
-    type: "line",
-    data: {
-      labels: result.rmse_per_component.map((r) => r.components),
-      datasets: [
+  const components = result.rmse_per_component.map((r) => r.components);
+  Plotly.newPlot(
+    "rmse-chart",
+    [
+      {
+        x: components,
+        y: result.rmse_per_component.map((r) => r.rmsep),
+        mode: "lines+markers",
+        type: "scatter",
+        name: "RMSEP",
+        line: { color: "#1f77b4" },
+      },
+      {
+        x: components,
+        y: result.rmse_per_component.map((r) => r.rmsec),
+        mode: "lines+markers",
+        type: "scatter",
+        name: "RMSEC",
+        line: { color: "#ff7f0e", dash: "dash" },
+      },
+    ],
+    {
+      title: "RMSEP og RMSEC vs. antall komponenter",
+      xaxis: { title: "Antall komponenter", dtick: 1 },
+      yaxis: { title: "RMSE" },
+      shapes: [
         {
-          label: "RMSEP",
-          data: result.rmse_per_component.map((r) => r.rmsep),
-          borderColor: "#1f77b4",
-          fill: false,
-        },
-        {
-          label: "RMSEC",
-          data: result.rmse_per_component.map((r) => r.rmsec),
-          borderColor: "#ff7f0e",
-          fill: false,
+          type: "line",
+          x0: result.optimal_components,
+          x1: result.optimal_components,
+          y0: 0,
+          y1: 1,
+          yref: "paper",
+          line: { color: "red", dash: "dot" },
         },
       ],
     },
-    options: {
-      scales: {
-        x: { title: { display: true, text: "Antall komponenter" } },
-        y: { title: { display: true, text: "RMSE" } },
-      },
-    },
-  });
+    PLOTLY_CONFIG
+  );
 }
 
 function renderPredictedActualChart(result) {
-  destroyChart("predictedActual");
-  const ctx = el("predicted-actual-chart").getContext("2d");
-  const rowIndexByPosition = result.diagnostics.map((d) => d.row_index);
-  state.charts.predictedActual = new Chart(ctx, {
+  const rowIndex = result.diagnostics.map((d) => d.row_index);
+  const calColor = "#1f77b4";
+  const cvColor = "#ff7f0e";
+  const labels = rowIndex.map((r) => `Rad ${r}`);
+
+  const traceCal = {
+    x: result.diagnostics.map((d) => d.y_actual),
+    y: result.diagnostics.map((d) => d.y_pred_cal),
+    customdata: rowIndex,
+    mode: "markers",
     type: "scatter",
-    data: {
-      datasets: [
-        {
-          label: "Kalibrering",
-          data: result.diagnostics.map((d) => ({ x: d.y_actual, y: d.y_pred_cal })),
-          backgroundColor: "#1f77b4",
-        },
-        {
-          label: "Kryssvalidering",
-          data: result.diagnostics.map((d) => ({ x: d.y_actual, y: d.y_pred_cv })),
-          backgroundColor: "#ff7f0e",
-        },
-      ],
+    name: "Kalibrering",
+    marker: { color: calColor },
+    text: labels,
+    hovertemplate: "%{text}<br>Faktisk: %{x}<br>Predikert: %{y}<extra></extra>",
+  };
+  const traceCv = {
+    x: result.diagnostics.map((d) => d.y_actual),
+    y: result.diagnostics.map((d) => d.y_pred_cv),
+    customdata: rowIndex,
+    mode: "markers",
+    type: "scatter",
+    name: "Kryssvalidering",
+    marker: { color: cvColor },
+    text: labels,
+    hovertemplate: "%{text}<br>Faktisk: %{x}<br>Predikert: %{y}<extra></extra>",
+  };
+  const allValues = result.diagnostics.flatMap((d) => [d.y_actual, d.y_pred_cal, d.y_pred_cv]);
+  const minV = Math.min(...allValues);
+  const maxV = Math.max(...allValues);
+  const traceRef = {
+    x: [minV, maxV],
+    y: [minV, maxV],
+    mode: "lines",
+    type: "scatter",
+    line: { color: "black", dash: "dash" },
+    showlegend: false,
+    hoverinfo: "skip",
+  };
+
+  Plotly.newPlot(
+    "predicted-actual-chart",
+    [traceCal, traceCv, traceRef],
+    {
+      title: "Faktisk vs. predikert Y",
+      xaxis: { title: "Faktisk Y" },
+      yaxis: { title: "Predikert Y" },
+      dragmode: "select",
     },
-    options: {
-      scales: {
-        x: { title: { display: true, text: "Faktisk Y" } },
-        y: { title: { display: true, text: "Predikert Y" } },
-      },
-      onClick: (_evt, elements) => showSelectedRow(elements, rowIndexByPosition),
-    },
-  });
+    PLOTLY_CONFIG
+  );
+
+  state.plotMeta["predicted-actual-chart"] = {
+    customData: [rowIndex, rowIndex],
+    baseColors: [calColor, cvColor],
+  };
+  bindRowSelectionEvents("predicted-actual-chart");
 }
 
 function renderScoresChart(result) {
-  destroyChart("scores");
-  const ctx = el("scores-chart").getContext("2d");
-  const rowIndexByPosition = result.scores.map((s) => s.row_index);
-  state.charts.scores = new Chart(ctx, {
-    type: "scatter",
-    data: {
-      datasets: [
-        {
-          label: "Scores",
-          data: result.scores.map((s) => ({
-            x: s.components[0] ?? 0,
-            y: s.components[1] ?? 0,
-          })),
-          backgroundColor: "#2ca02c",
-        },
-      ],
-    },
-    options: {
-      scales: {
-        x: { title: { display: true, text: "PC1" } },
-        y: { title: { display: true, text: "PC2" } },
+  const rowIndex = result.scores.map((s) => s.row_index);
+  const baseColor = "#2ca02c";
+
+  Plotly.newPlot(
+    "scores-chart",
+    [
+      {
+        x: result.scores.map((s) => s.components[0] ?? 0),
+        y: result.scores.map((s) => s.components[1] ?? 0),
+        customdata: rowIndex,
+        mode: "markers",
+        type: "scatter",
+        name: "Scores",
+        marker: { color: baseColor },
+        text: rowIndex.map((r) => `Rad ${r}`),
+        hovertemplate: "%{text}<br>PC1: %{x}<br>PC2: %{y}<extra></extra>",
       },
-      onClick: (_evt, elements) => showSelectedRow(elements, rowIndexByPosition),
+    ],
+    {
+      title: "Scores (PC1 vs. PC2)",
+      xaxis: { title: "PC1" },
+      yaxis: { title: "PC2" },
+      dragmode: "select",
+      showlegend: false,
     },
-  });
+    PLOTLY_CONFIG
+  );
+
+  state.plotMeta["scores-chart"] = { customData: [rowIndex], baseColors: [baseColor] };
+  bindRowSelectionEvents("scores-chart");
 }
 
 function renderCoefficientsChart(result) {
-  destroyChart("coefficients");
-  const ctx = el("coefficients-chart").getContext("2d");
   const entries = Object.entries(result.coefficients);
-  state.charts.coefficients = new Chart(ctx, {
-    type: "bar",
-    data: {
-      labels: entries.map(([name]) => name),
-      datasets: [
-        {
-          label: "Koeffisient",
-          data: entries.map(([, value]) => value),
-          backgroundColor: entries.map(([, value]) => (value < 0 ? "#d62728" : "#1f77b4")),
-        },
-      ],
-    },
-    options: {
-      indexAxis: "y",
-    },
-  });
-}
+  const cols = entries.map(([name]) => name);
+  const values = entries.map(([, value]) => value);
+  const baseColors = values.map((value) => (value < 0 ? "#d62728" : "#1f77b4"));
 
-function showSelectedRow(elements, rowIndexByPosition) {
-  if (!elements.length) return;
-  const rowIndex = rowIndexByPosition[elements[0].index];
-  setStatus("selected-row-info", `Valgt punkt: radindeks ${rowIndex}`);
+  Plotly.newPlot(
+    "coefficients-chart",
+    [
+      {
+        x: cols,
+        y: values,
+        type: "bar",
+        marker: { color: baseColors },
+      },
+    ],
+    {
+      title: "Koeffisienter",
+      xaxis: { title: "Variabel" },
+      yaxis: { title: "Koeffisientverdi" },
+      dragmode: "select",
+    },
+    PLOTLY_CONFIG
+  );
+
+  state.plotMeta["coefficients-chart"] = { customData: [cols], baseColors: [baseColors] };
+  bindColSelectionEvents("coefficients-chart");
 }

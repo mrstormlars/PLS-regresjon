@@ -110,3 +110,42 @@ table th {
   border-radius: 4px;
   padding: 0.5rem 1rem;
 }
+
+.plot {
+  width: 100%;
+  max-width: 700px;
+  height: 400px;
+  margin-bottom: 1rem;
+}
+
+.plot.hidden {
+  display: none;
+}
+
+#selection-controls,
+#suggestions-section,
+#optimize-section {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid #ddd;
+}
+
+#selection-controls button,
+#suggestions-section button,
+#optimize-section button {
+  margin-right: 0.5rem;
+}
+
+#suggestions-section label,
+#optimize-section label {
+  display: inline-block;
+  margin-right: 0.5rem;
+}
+
+#suggestions-section select,
+#suggestions-section input,
+#optimize-section input {
+  display: inline-block;
+  width: auto;
+  margin-right: 1rem;
+}
