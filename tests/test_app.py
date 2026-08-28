@@ -111,6 +111,7 @@ def test_analyze_non_numeric_y_returns_400():
         json={"file_id": file_id, "sheet": "CSV", "header_row": 0, "y_col": "Y"},
     )
     assert response.status_code == 400
+    assert "ikke numeriske verdier" in response.json()["detail"]
 
 
 def test_analyze_too_few_rows_returns_400():
@@ -126,3 +127,4 @@ def test_analyze_too_few_rows_returns_400():
         json={"file_id": file_id, "sheet": "CSV", "header_row": 0, "y_col": "Y"},
     )
     assert response.status_code == 400
+    assert "For få gyldige rader" in response.json()["detail"]

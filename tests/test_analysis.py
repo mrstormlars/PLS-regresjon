@@ -40,14 +40,14 @@ def test_run_analysis_fits_strong_linear_signal():
 def test_run_analysis_rejects_non_numeric_y():
     df = make_signal_dataset(n_rows=20)
     df["Y"] = ["ikke_tall"] * len(df)
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="ikke numeriske verdier"):
         analysis.run_analysis(df, y_col="Y")
 
 
 def test_run_analysis_rejects_too_few_valid_rows():
     n = config.MIN_VALID_ROWS - 1
     df = make_signal_dataset(n_rows=n)
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="For få gyldige rader"):
         analysis.run_analysis(df, y_col="Y")
 
 
@@ -131,3 +131,19 @@ def test_identify_low_impact_variables_finds_small_coefficient():
 def test_identify_low_impact_variables_returns_empty_when_threshold_zero():
     low_impact = analysis.identify_low_impact_variables(_coef_df(), threshold=0.0)
     assert low_impact == []
+
+
+def test_compute_t2_guards_against_zero_variance_component():
+    # Second column is constant across rows -> zero sample variance. Without
+    # the epsilon guard this divides by zero, producing inf/NaN T2 values.
+    T = np.array(
+        [
+            [1.0, 5.0],
+            [2.0, 5.0],
+            [3.0, 5.0],
+            [-1.0, 5.0],
+        ]
+    )
+    t2 = analysis._compute_t2(T)
+    assert np.all(np.isfinite(t2))
+    assert np.all(t2 > 0)

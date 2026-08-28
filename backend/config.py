@@ -8,8 +8,24 @@ All numeric constants used across the backend live here, per CLAUDE.md's
 MAX_COMPONENTS_DEFAULT = 10
 CV_FOLDS_DEFAULT = 10
 
+# Minimum number of cross-validation folds; below this, KFold is meaningless.
+MIN_CV_FOLDS = 2
+
 # Minimum number of complete rows required to run an analysis
 MIN_VALID_ROWS = 10
+
+# identify_outliers: default threshold when none is supplied is Q3 + IQR_MULTIPLIER * IQR
+OUTLIER_IQR_QUANTILE_LOW = 0.25
+OUTLIER_IQR_QUANTILE_HIGH = 0.75
+OUTLIER_IQR_MULTIPLIER = 1.5
+
+# identify_low_impact_variables: default threshold when none is supplied is
+# this fraction of the largest absolute coefficient
+LOW_IMPACT_COEFFICIENT_FRACTION = 0.1
+
+# T2 diagnostic: substituted for a component's variance when that variance is
+# exactly zero, to avoid division by zero.
+T2_ZERO_VARIANCE_EPSILON = 1e-10
 
 # Upload constraints
 MAX_UPLOAD_SIZE_MB = 20

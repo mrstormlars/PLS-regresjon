@@ -16,9 +16,6 @@ from sklearn.model_selection import KFold, cross_val_predict
 from backend import config
 from backend.parsing import ValidationError
 
-# Minimum number of cross-validation folds; below this, KFold is meaningless.
-MIN_CV_FOLDS = 2
-
 
 def normalize_data(
     df: pd.DataFrame, exclude_columns: list[str] | str | None = None
@@ -64,7 +61,7 @@ def identify_outliers(
             of y_distance / X_distance / T2.
         method: 'y_distance', 'X_distance', or 'T2'.
         threshold: Cutoff value (rows strictly above are outliers). If None,
-            uses Q3 + 1.5 * IQR.
+            uses Q3 + config.OUTLIER_IQR_MULTIPLIER * IQR.
 
     Returns:
         List of row indices whose diagnostic value exceeds the threshold.
@@ -78,10 +75,10 @@ def identify_outliers(
     values = included_df[method]
 
     if threshold is None:
-        q1 = values.quantile(0.25)
-        q3 = values.quantile(0.75)
+        q1 = values.quantile(config.OUTLIER_IQR_QUANTILE_LOW)
+        q3 = values.quantile(config.OUTLIER_IQR_QUANTILE_HIGH)
         iqr = q3 - q1
-        threshold = q3 + 1.5 * iqr
+        threshold = q3 + config.OUTLIER_IQR_MULTIPLIER * iqr
 
     outliers = included_df[values > threshold]
     return outliers["RowIndex"].tolist()
@@ -94,7 +91,8 @@ def identify_low_impact_variables(
 
     Args:
         coef_df: DataFrame with columns IsExcluded, VariableName, AbsCoefficient.
-        threshold: Absolute-coefficient cutoff. If None, uses 10% of the max.
+        threshold: Absolute-coefficient cutoff. If None, uses
+            config.LOW_IMPACT_COEFFICIENT_FRACTION of the max.
 
     Returns:
         List of variable names whose |coefficient| is below the threshold.
@@ -103,7 +101,7 @@ def identify_low_impact_variables(
 
     if threshold is None:
         max_abs_coef = included_df["AbsCoefficient"].max()
-        threshold = 0.1 * max_abs_coef
+        threshold = config.LOW_IMPACT_COEFFICIENT_FRACTION * max_abs_coef
 
     low_impact = included_df[included_df["AbsCoefficient"] < threshold]
     return low_impact["VariableName"].tolist()
@@ -127,6 +125,20 @@ def _apply_limits(
         if high is not None:
             mask &= ~(series > high)
     return df[mask]
+
+
+def _compute_t2(T: np.ndarray) -> np.ndarray:
+    """Compute Hotelling's T2 statistic per row from a PLS score matrix.
+
+    A component with zero (sample) variance across rows would otherwise cause
+    a division by zero; such components are guarded by substituting
+    config.T2_ZERO_VARIANCE_EPSILON for their variance.
+    """
+    component_var = np.var(T, axis=0, ddof=1)
+    component_var = np.where(
+        component_var == 0, config.T2_ZERO_VARIANCE_EPSILON, component_var
+    )
+    return np.sum((T**2) / component_var, axis=1)
 
 
 def run_analysis(
@@ -185,7 +197,7 @@ def run_analysis(
 
     n_rows, n_vars = X.shape
     max_components = max(1, min(max_components, n_vars, n_rows - 1))
-    actual_cv = max(MIN_CV_FOLDS, min(cv_folds, n_rows))
+    actual_cv = max(config.MIN_CV_FOLDS, min(cv_folds, n_rows))
 
     combined = X.copy()
     combined[y_col] = y
@@ -226,9 +238,7 @@ def run_analysis(
     X_distance = np.linalg.norm(X_norm.to_numpy() - X_hat, axis=1)
     y_distance = np.abs(y_norm.to_numpy() - y_cal_pred)
 
-    component_var = np.var(T, axis=0, ddof=1)
-    component_var = np.where(component_var == 0, 1e-10, component_var)
-    T2 = np.sum((T**2) / component_var, axis=1)
+    T2 = _compute_t2(T)
 
     coef = np.asarray(opt_model.coef_).ravel()
 
