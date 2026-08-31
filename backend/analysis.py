@@ -173,6 +173,38 @@ def _compute_raw_coefficients(
     return coefficients_raw, float(intercept)
 
 
+def _model_input(var: str, x_raw: float, log_x_cols: set[str]) -> float:
+    """Convert a raw (original-units) x value to what the raw-scale model
+    coefficients expect: log10(x) for a log-selected variable, x unchanged
+    otherwise.
+
+    Raises ValidationError (Norwegian message) if a log-selected variable's
+    value is not strictly positive.
+    """
+    if var in log_x_cols:
+        if x_raw <= 0:
+            raise ValidationError(
+                f"Verdien for '{var}' må være positiv når logaritmisk skala er "
+                f"valgt (fikk {x_raw:.4g})."
+            )
+        return float(np.log10(x_raw))
+    return float(x_raw)
+
+
+def _predict_raw(
+    intercept: float,
+    coefficients_raw: dict[str, float],
+    x_values_raw: dict[str, float],
+    log_x_cols: set[str],
+    log_y: bool,
+) -> float:
+    """Predict y in original units from x values in original (pre-log10) units."""
+    y_model_scale = intercept
+    for var, coef in coefficients_raw.items():
+        y_model_scale += coef * _model_input(var, x_values_raw[var], log_x_cols)
+    return float(10**y_model_scale) if log_y else float(y_model_scale)
+
+
 def _compute_t2(T: np.ndarray) -> np.ndarray:
     """Compute Hotelling's T2 statistic per row from a PLS score matrix.
 
@@ -236,6 +268,7 @@ def run_analysis(
 
     x_cols = [c for c in working.columns if c != y_col]
     X = working[x_cols].apply(pd.to_numeric, errors="coerce")
+    X_original = X.copy()  # pre-log10, for x_means_raw later
     if log_x_cols:
         with np.errstate(divide="ignore", invalid="ignore"):
             for col in log_x_cols:
@@ -245,8 +278,24 @@ def run_analysis(
     y = y_numeric.replace([np.inf, -np.inf], np.nan)
 
     valid_mask = X.notna().all(axis=1) & y.notna()
+
+    # Missing/invalid-value visibility: counted among the rows that entered
+    # this complete-case filter, i.e. before it drops anything. A cell is
+    # "invalid" here if it's NaN after numeric coercion, inf, or NaN from a
+    # failed log10 (non-positive value in a log-selected column).
+    n_rows_dropped_missing = int((~valid_mask).sum())
+    missing_by_column: dict[str, int] = {}
+    for col in x_cols:
+        count = int(X[col].isna().sum())
+        if count > 0:
+            missing_by_column[col] = count
+    y_missing_count = int(y.isna().sum())
+    if y_missing_count > 0:
+        missing_by_column[y_col] = y_missing_count
+
     X = X.loc[valid_mask]
     y = y.loc[valid_mask]
+    X_original = X_original.loc[valid_mask]
 
     if len(y) < config.MIN_VALID_ROWS:
         raise ValidationError(
@@ -329,6 +378,11 @@ def run_analysis(
     coefficients = {col: float(coef[i]) for i, col in enumerate(x_cols)}
     coefficients_raw, intercept = _compute_raw_coefficients(X, y, coefficients)
 
+    x_means_raw = {col: float(X_original[col].mean()) for col in x_cols}
+    y_baseline_raw = _predict_raw(
+        intercept, coefficients_raw, x_means_raw, set(log_x_cols), log_y
+    )
+
     return {
         "rmse_per_component": [
             {"components": c, "rmsep": rmsep_values[i], "rmsec": rmsec_values[i]}
@@ -343,6 +397,10 @@ def run_analysis(
         "coefficients_raw": coefficients_raw,
         "intercept": intercept,
         "diagnostics": diagnostics,
+        "n_rows_dropped_missing": n_rows_dropped_missing,
+        "missing_by_column": missing_by_column,
+        "x_means_raw": x_means_raw,
+        "y_baseline_raw": y_baseline_raw,
     }
 
 
@@ -502,4 +560,82 @@ def optimize_variables(
         "final_excluded_cols": best_excluded,
         "results": best_result,
         "stop_reason": stop_reason,
+    }
+
+
+def simulate_change(
+    intercept: float,
+    coefficients_raw: dict[str, float],
+    x_means_raw: dict[str, float],
+    log_y: bool,
+    log_x_cols: list[str] | None,
+    changes: dict[str, dict],
+) -> dict:
+    """What-if simulation: change one or more X-variables from their
+    baseline means (both given and returned in original raw units) and
+    predict the resulting Y.
+
+    changes: {var: {"mode": "absolute"|"percent", "value": float}}.
+    "absolute" adds `value` to the baseline; "percent" scales it by
+    (1 + value/100). log10 is applied internally to log_x_cols variables
+    when computing the model-scale prediction; `contributions` is reported
+    on that model scale (additive - unlike the raw-scale `delta`, which is
+    not simply the sum of contributions when log_y makes the back-transform
+    nonlinear).
+
+    Raises ValidationError (Norwegian message) for: an unknown variable
+    name, an unrecognized change mode, or a change that drives a
+    log-selected variable to a non-positive value.
+    """
+    log_x_col_set = set(log_x_cols or [])
+    changes = changes or {}
+
+    for var in changes:
+        if var not in coefficients_raw:
+            raise ValidationError(f"Ukjent variabel: '{var}'.")
+
+    y_base_model = intercept
+    y_new_model = intercept
+    contributions: dict[str, float] = {}
+
+    for var, coef in coefficients_raw.items():
+        x_base = x_means_raw[var]
+        base_input = _model_input(var, x_base, log_x_col_set)
+        y_base_model += coef * base_input
+
+        x_new = x_base
+        if var in changes:
+            mode = changes[var].get("mode")
+            value = changes[var].get("value", 0.0)
+            if mode == "percent":
+                x_new = x_base * (1 + value / 100.0)
+            elif mode == "absolute":
+                x_new = x_base + value
+            else:
+                raise ValidationError(
+                    f"Ukjent modus '{mode}' for '{var}'. Bruk 'absolute' eller 'percent'."
+                )
+
+        new_input = _model_input(var, x_new, log_x_col_set)
+        y_new_model += coef * new_input
+
+        if var in changes:
+            contributions[var] = float(coef * (new_input - base_input))
+
+    if log_y:
+        y_base = float(10**y_base_model)
+        y_new = float(10**y_new_model)
+    else:
+        y_base = float(y_base_model)
+        y_new = float(y_new_model)
+
+    delta = float(y_new - y_base)
+    delta_percent = float(delta / y_base * 100.0) if y_base != 0 else 0.0
+
+    return {
+        "y_base": y_base,
+        "y_new": y_new,
+        "delta": delta,
+        "delta_percent": delta_percent,
+        "contributions": contributions,
     }

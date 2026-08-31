@@ -3,6 +3,7 @@
 
 const PLOTLY_CONFIG = { responsive: true, displaylogo: false };
 const SELECTION_COLOR = "#e6308a";
+const SIMULATE_DEBOUNCE_MS = 400;
 
 const state = {
   fileId: null,
@@ -25,6 +26,7 @@ const state = {
   lastOptimizeResult: null,
   // "normalized" or "raw" - which coefficient scale the bar chart shows.
   coefficientView: "normalized",
+  simulateDebounceTimer: null,
 };
 
 const el = (id) => document.getElementById(id);
@@ -834,18 +836,35 @@ function renderResults(result) {
   el("coef-view-normalized").checked = true;
 
   renderKeyFigures(result);
+  renderMissingValuesSummary(result);
   renderRmseChart(result);
   renderPredictedActualChart(result);
   renderScoresChart(result);
   renderCoefficientsChart(result);
   renderOutlierMapChart(result);
   updateOutlierMapGuide();
+  renderSimulationTable(result);
 
   refreshRowSelection();
   refreshColSelection();
   el("optimize-history-chart").classList.add("hidden");
   el("apply-optimized-button").classList.add("hidden");
   el("export-report-button").disabled = false;
+}
+
+function renderMissingValuesSummary(result) {
+  const container = el("missing-values-summary");
+  const n = result.n_rows_dropped_missing || 0;
+  if (n > 0) {
+    const perColumn = Object.entries(result.missing_by_column || {})
+      .map(([col, count]) => `${col}: ${count}`)
+      .join(", ");
+    container.textContent = `${n} rader fjernet pga. manglende/ugyldige verdier (${perColumn}).`;
+    container.classList.remove("hidden");
+  } else {
+    container.textContent = "";
+    container.classList.add("hidden");
+  }
 }
 
 function renderKeyFigures(result) {
@@ -1154,4 +1173,118 @@ el("coef-view-normalized").addEventListener("change", () => {
 el("coef-view-raw").addEventListener("change", () => {
   state.coefficientView = "raw";
   if (state.lastAnalyzeResult) renderCoefficientsChart(state.lastAnalyzeResult);
+});
+
+// ---------------------------------------------------------------------------
+// What-if simulation table.
+// ---------------------------------------------------------------------------
+
+function renderSimulationTable(result) {
+  const body = el("simulation-table-body");
+  body.innerHTML = "";
+
+  const yRow = document.createElement("tr");
+  yRow.innerHTML =
+    "<td>Y (respons)</td>" +
+    `<td>${result.y_baseline_raw.toFixed(4)}</td>` +
+    "<td>-</td><td>-</td>" +
+    `<td id="sim-y-value">${result.y_baseline_raw.toFixed(4)}</td>` +
+    '<td id="sim-y-delta">0.0000</td>' +
+    '<td id="sim-y-delta-pct">0.00 %</td>';
+  body.appendChild(yRow);
+
+  for (const [col, baseline] of Object.entries(result.x_means_raw || {})) {
+    const row = document.createElement("tr");
+    row.className = "sim-x-row";
+    row.dataset.column = col;
+
+    const nameTd = document.createElement("td");
+    nameTd.textContent = col;
+
+    const baseTd = document.createElement("td");
+    baseTd.textContent = baseline.toFixed(4);
+
+    const changeTd = document.createElement("td");
+    const changeInput = document.createElement("input");
+    changeInput.type = "number";
+    changeInput.step = "any";
+    changeInput.className = "sim-change-input";
+    changeInput.dataset.column = col;
+    changeInput.addEventListener("input", scheduleSimulate);
+    changeTd.appendChild(changeInput);
+
+    const modeTd = document.createElement("td");
+    const modeSelect = document.createElement("select");
+    modeSelect.className = "sim-mode-select";
+    modeSelect.dataset.column = col;
+    const absoluteOption = document.createElement("option");
+    absoluteOption.value = "absolute";
+    absoluteOption.textContent = "absolutt";
+    const percentOption = document.createElement("option");
+    percentOption.value = "percent";
+    percentOption.textContent = "%";
+    modeSelect.appendChild(absoluteOption);
+    modeSelect.appendChild(percentOption);
+    modeSelect.addEventListener("change", scheduleSimulate);
+    modeTd.appendChild(modeSelect);
+
+    row.appendChild(nameTd);
+    row.appendChild(baseTd);
+    row.appendChild(changeTd);
+    row.appendChild(modeTd);
+    for (let i = 0; i < 3; i++) {
+      const blank = document.createElement("td");
+      blank.textContent = "-";
+      row.appendChild(blank);
+    }
+
+    body.appendChild(row);
+  }
+}
+
+function scheduleSimulate() {
+  clearTimeout(state.simulateDebounceTimer);
+  state.simulateDebounceTimer = setTimeout(runSimulate, SIMULATE_DEBOUNCE_MS);
+}
+
+function collectSimulationChanges() {
+  const changes = {};
+  for (const input of document.querySelectorAll(".sim-change-input")) {
+    const raw = input.value.trim();
+    if (raw === "") continue;
+    const col = input.dataset.column;
+    const modeSelect = findColumnRow("sim-mode-select", col);
+    changes[col] = { mode: modeSelect ? modeSelect.value : "absolute", value: parseFloat(raw) };
+  }
+  return changes;
+}
+
+async function runSimulate() {
+  const result = state.lastAnalyzeResult;
+  if (!result) return;
+  const payload = state.lastAnalyzePayload || {};
+
+  try {
+    const data = await postJson("/api/simulate", {
+      intercept: result.intercept,
+      coefficients_raw: result.coefficients_raw,
+      x_means_raw: result.x_means_raw,
+      log_y: payload.log_y || false,
+      log_x_cols: payload.log_x_cols || [],
+      changes: collectSimulationChanges(),
+    });
+    el("sim-y-value").textContent = data.y_new.toFixed(4);
+    el("sim-y-delta").textContent = data.delta.toFixed(4);
+    el("sim-y-delta-pct").textContent = `${data.delta_percent.toFixed(2)} %`;
+    setStatus("simulation-status", "");
+  } catch (err) {
+    setStatus("simulation-status", err.message, true);
+  }
+}
+
+el("simulation-reset-button").addEventListener("click", () => {
+  for (const input of document.querySelectorAll(".sim-change-input")) input.value = "";
+  for (const select of document.querySelectorAll(".sim-mode-select")) select.value = "absolute";
+  setStatus("simulation-status", "");
+  runSimulate();
 });

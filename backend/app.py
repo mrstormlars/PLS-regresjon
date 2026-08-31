@@ -98,6 +98,20 @@ class ReportRequest(BaseModel):
     settings: ReportSettings
 
 
+class SimulateChangeEntry(BaseModel):
+    mode: str
+    value: float
+
+
+class SimulateRequest(BaseModel):
+    intercept: float
+    coefficients_raw: dict[str, float]
+    x_means_raw: dict[str, float]
+    log_y: bool = False
+    log_x_cols: list[str] = []
+    changes: dict[str, SimulateChangeEntry] = {}
+
+
 def _sanitize_records(df: pd.DataFrame) -> list[dict]:
     """Convert a DataFrame to JSON-safe records (NaN/Inf -> None)."""
     clean = df.replace([np.inf, -np.inf], np.nan)
@@ -238,6 +252,24 @@ async def suggest_low_impact(request: SuggestLowImpactRequest):
         coef_df, threshold=request.threshold
     )
     return {"columns": columns}
+
+
+@app.post("/api/simulate")
+async def simulate(request: SimulateRequest):
+    changes = {var: change.model_dump() for var, change in request.changes.items()}
+    try:
+        result = analysis.simulate_change(
+            intercept=request.intercept,
+            coefficients_raw=request.coefficients_raw,
+            x_means_raw=request.x_means_raw,
+            log_y=request.log_y,
+            log_x_cols=request.log_x_cols,
+            changes=changes,
+        )
+    except ValidationError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
+
+    return result
 
 
 @app.post("/api/report")
