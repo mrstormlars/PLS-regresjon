@@ -348,3 +348,27 @@ def test_run_analysis_raw_coefficients_equivalent_on_log_y_scale():
     log_y = np.log10(df["Y"])
     max_error = _raw_coefficient_equivalence_max_error(df, result, x_cols, log_y)
     assert max_error < 1e-8
+
+
+def test_run_analysis_raw_coefficients_equivalent_with_log_x_cols():
+    # Regression test for the log_x_cols back-scaling path specifically:
+    # "raw" for a log10-selected column is post-log10, pre-standardization,
+    # so the equivalence check must compare against log10(X1), not X1 itself.
+    n = 40
+    rng = np.random.default_rng(3)
+    x1 = np.abs(rng.normal(loc=100, scale=20, size=n)) + 1.0  # positive, for log10
+    x2 = rng.normal(size=n)
+    x3 = rng.normal(size=n)
+    y = 2.0 * np.log10(x1) - 1.5 * x2 + 0.5 * x3 + rng.normal(scale=0.05, size=n)
+    df = pd.DataFrame({"X1": x1, "X2": x2, "X3": x3, "Y": y})
+
+    result = analysis.run_analysis(
+        df, y_col="Y", log_x_cols=["X1"], max_components=3, cv_folds=5
+    )
+    x_cols = ["X1", "X2", "X3"]
+
+    raw_df = df.copy()
+    raw_df["X1"] = np.log10(raw_df["X1"])
+
+    max_error = _raw_coefficient_equivalence_max_error(raw_df, result, x_cols, df["Y"])
+    assert max_error < 1e-8
