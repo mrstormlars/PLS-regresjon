@@ -203,6 +203,55 @@ def _predicted_vs_measured_section(result: dict) -> str:
     """
 
 
+def _rmse_section() -> str:
+    return """
+    <h2>RMSEP og RMSEC vs. antall komponenter</h2>
+    <div id="rmse-plot" style="width:700px;height:400px;"></div>
+    """
+
+
+def _simulation_section(result: dict, simulation: dict | None) -> str:
+    """Norwegian "Simulering" section for the last what-if state held by the
+    frontend at export time. Entirely absent (returns "") when no
+    simulation was run, per contract: an absent/null `simulation` or an
+    empty `changes` dict means no section at all - not an empty one.
+    """
+    if not simulation or not simulation.get("changes"):
+        return ""
+
+    x_means_raw = result.get("x_means_raw", {})
+    changes = simulation["changes"]
+    rows = "".join(
+        f"<tr><td>{_esc(var)}</td>"
+        f"<td>{_fmt(change.get('value'))}{' %' if change.get('mode') == 'percent' else ''}</td>"
+        f"<td>{_fmt(x_means_raw.get(var))}</td></tr>"
+        for var, change in changes.items()
+    )
+
+    return f"""
+    <h2>Simulering</h2>
+    <table border="1" cellpadding="4" cellspacing="0">
+      <thead>
+        <tr><th>Variabel</th><th>Endring</th><th>Basisverdi (rå)</th></tr>
+      </thead>
+      <tbody>
+        {rows}
+      </tbody>
+    </table>
+    <ul>
+      <li>Y, basisverdi: {_fmt(simulation.get("y_base"))}</li>
+      <li>Y, simulert verdi: {_fmt(simulation.get("y_new"))}</li>
+      <li>Endring (absolutt): {_fmt(simulation.get("delta"))}</li>
+      <li>Endring (%): {_fmt(simulation.get("delta_percent"), decimals=2)}</li>
+    </ul>
+    <p>
+      Merk: verdiene over er i rå enheter (før forbehandling/log10/standardisering).
+      Koeffisienter for log10-transformerte variabler gjelder log10-verdien av
+      variabelen, ikke den opprinnelige verdien.
+    </p>
+    """
+
+
 def _plot_script(result: dict) -> str:
     coefficients = result.get("coefficients", {})
     cols = list(coefficients.keys())
@@ -223,8 +272,55 @@ def _plot_script(result: dict) -> str:
     y_min = min(all_y) if all_y else 0
     y_max = max(all_y) if all_y else 1
 
+    rmse_per_component = result.get("rmse_per_component", [])
+    components = [e["components"] for e in rmse_per_component]
+    rmsep_values = [e["rmsep"] for e in rmse_per_component]
+    rmsec_values = [e["rmsec"] for e in rmse_per_component]
+    optimal_components = result.get("optimal_components")
+    optimal_label = f"Valgt: {optimal_components} komponenter"
+
     return f"""
     <script>
+      Plotly.newPlot('rmse-plot', [
+        {{
+          x: {_json_for_script(components)},
+          y: {_json_for_script(rmsep_values)},
+          mode: 'lines+markers',
+          type: 'scatter',
+          name: 'RMSEP',
+          line: {{ color: '#1f77b4' }}
+        }},
+        {{
+          x: {_json_for_script(components)},
+          y: {_json_for_script(rmsec_values)},
+          mode: 'lines+markers',
+          type: 'scatter',
+          name: 'RMSEC',
+          line: {{ color: '#ff7f0e', dash: 'dash' }}
+        }}
+      ], {{
+        title: 'RMSEP og RMSEC vs. antall komponenter',
+        xaxis: {{ title: 'Antall komponenter', dtick: 1 }},
+        yaxis: {{ title: 'RMSE' }},
+        shapes: [{{
+          type: 'line',
+          x0: {_json_for_script(optimal_components)},
+          x1: {_json_for_script(optimal_components)},
+          y0: 0, y1: 1, yref: 'paper',
+          line: {{ color: 'red', dash: 'dot' }}
+        }}],
+        annotations: [{{
+          x: {_json_for_script(optimal_components)},
+          y: 1, yref: 'paper',
+          xanchor: 'left', yanchor: 'top',
+          showarrow: false,
+          bgcolor: 'rgba(255,255,255,0.85)',
+          bordercolor: '#333',
+          borderwidth: 1,
+          text: {_json_for_script(optimal_label)}
+        }}]
+      }}, {{ displaylogo: false }});
+
       Plotly.newPlot('coef-plot', [{{
         x: {_json_for_script(cols)},
         y: {_json_for_script(values)},
@@ -281,7 +377,9 @@ def _plot_script(result: dict) -> str:
     """
 
 
-def build_report_html(result: dict, settings: dict) -> str:
+def build_report_html(
+    result: dict, settings: dict, simulation: dict | None = None
+) -> str:
     """Build a standalone HTML report string for a completed analysis.
 
     `result` is an /api/analyze-shaped dict (coefficients, coefficients_raw,
@@ -289,7 +387,9 @@ def build_report_html(result: dict, settings: dict) -> str:
     ...). `settings` carries the run's metadata (file/sheet/range, limits,
     log transforms, exclusions, cv_folds, max_components) needed for the
     "Rådata"/"Forbehandling"/"Fjernede ..." sections, none of which is
-    derivable from `result` alone.
+    derivable from `result` alone. `simulation` is the last /api/simulate
+    state held by the frontend at export time (or None/absent changes for
+    no simulation), producing the optional "Simulering" section.
     """
     body_sections = "".join(
         [
@@ -297,8 +397,10 @@ def build_report_html(result: dict, settings: dict) -> str:
             _preprocessing_section(result, settings),
             _removed_rows_section(settings),
             _removed_variables_section(settings),
+            _rmse_section(),
             _coefficients_section(result, settings),
             _predicted_vs_measured_section(result),
+            _simulation_section(result, simulation),
         ]
     )
 
