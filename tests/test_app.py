@@ -522,6 +522,46 @@ def test_report_returns_self_contained_html_with_all_sections():
     assert re.search(r"<script[^>]*\bsrc=", document) is None  # plotly is inline
 
 
+def test_report_shows_no_missing_values_message_for_clean_data():
+    result = _analyze_sample_result()
+    assert result["n_rows_dropped_missing"] == 0
+    response = client.post(
+        "/api/report", json={"result": result, "settings": _report_settings()}
+    )
+    assert response.status_code == 200
+    assert "Ingen rader fjernet pga. manglende/ugyldige verdier." in response.text
+
+
+def test_report_shows_missing_value_counts_for_dirty_data():
+    content = _missing_value_csv_content()
+    file_id = _upload("missing.csv", content, content_type="text/csv").json()["file_id"]
+    analyze_response = client.post(
+        "/api/analyze",
+        json={
+            "file_id": file_id,
+            "sheet": "CSV",
+            "header_row": 1,
+            "y_col": "Y",
+            "max_components": 1,
+            "cv_folds": 3,
+        },
+    )
+    result = analyze_response.json()
+    response = client.post(
+        "/api/report",
+        json={
+            "result": result,
+            "settings": _report_settings(file_name="missing.csv", sheet="CSV"),
+        },
+    )
+    assert response.status_code == 200
+    document = response.text
+    assert "4 rader fjernet pga. manglende/ugyldige verdier." in document
+    assert "X1: 2" in document
+    assert "X2: 1" in document
+    assert "Y: 1" in document
+
+
 def test_report_rejects_empty_result():
     response = client.post(
         "/api/report", json={"result": {}, "settings": _report_settings()}

@@ -82,7 +82,7 @@ def _raw_data_section(result: dict, settings: dict) -> str:
     """
 
 
-def _preprocessing_section(settings: dict) -> str:
+def _preprocessing_section(result: dict, settings: dict) -> str:
     start_row = settings.get("start_row")
     end_row = settings.get("end_row")
     start_col = settings.get("start_col")
@@ -110,6 +110,19 @@ def _preprocessing_section(settings: dict) -> str:
     log_y = "Ja" if settings.get("log_y") else "Nei"
     log_x_cols = _list_or_none(settings.get("log_x_cols") or [], "Ingen")
 
+    n_dropped = result.get("n_rows_dropped_missing", 0)
+    missing_by_column = result.get("missing_by_column") or {}
+    if n_dropped:
+        missing_items = "".join(
+            f"<li>{_esc(col)}: {count}</li>" for col, count in missing_by_column.items()
+        )
+        missing_html = f"""
+        <p>{n_dropped} rader fjernet pga. manglende/ugyldige verdier.</p>
+        <ul>{missing_items}</ul>
+        """
+    else:
+        missing_html = "<p>Ingen rader fjernet pga. manglende/ugyldige verdier.</p>"
+
     return f"""
     <h2>Forbehandling</h2>
     <ul>
@@ -120,6 +133,8 @@ def _preprocessing_section(settings: dict) -> str:
     </ul>
     <h3>Grenseverdier</h3>
     {limits_html}
+    <h3>Manglende/ugyldige verdier</h3>
+    {missing_html}
     """
 
 
@@ -279,7 +294,7 @@ def build_report_html(result: dict, settings: dict) -> str:
     body_sections = "".join(
         [
             _raw_data_section(result, settings),
-            _preprocessing_section(settings),
+            _preprocessing_section(result, settings),
             _removed_rows_section(settings),
             _removed_variables_section(settings),
             _coefficients_section(result, settings),
