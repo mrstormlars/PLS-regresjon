@@ -84,6 +84,8 @@
 
     <div id="key-figures"></div>
 
+    <p id="missing-values-summary" class="status hidden"></p>
+
     <button id="export-report-button" disabled>Eksporter rapport (HTML)</button>
     <p id="export-report-status" class="status"></p>
 
@@ -164,6 +166,30 @@
       <div id="optimize-summary"></div>
       <p>Trinn 2: bruk forslaget for å fjerne de markerte variablene og oppdatere resultatene.</p>
       <button id="apply-optimized-button" class="hidden">Bruk optimalisert utvalg</button>
+    </div>
+
+    <div id="simulation-section">
+      <h3>Hva-hvis-simulering</h3>
+      <p class="status">
+        Verdiene under er i rå enheter (før forbehandling/log10/standardisering).
+        Ekskluderte variabler vises ikke.
+      </p>
+      <button id="simulation-reset-button">Nullstill</button>
+      <p id="simulation-status" class="status"></p>
+      <table id="simulation-table">
+        <thead>
+          <tr>
+            <th>Variabel</th>
+            <th>Basisverdi (rå)</th>
+            <th>Endring</th>
+            <th>Modus</th>
+            <th>Simulert Y</th>
+            <th>Endring (absolutt)</th>
+            <th>Endring (%)</th>
+          </tr>
+        </thead>
+        <tbody id="simulation-table-body"></tbody>
+      </table>
     </div>
   </section>
 

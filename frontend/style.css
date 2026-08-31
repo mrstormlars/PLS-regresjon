@@ -68,6 +68,17 @@ table th {
   background-color: #f0f0f0;
 }
 
+#simulation-table td:first-child {
+  text-align: left;
+}
+
+#simulation-table input[type="number"],
+#simulation-table select {
+  display: inline-block;
+  width: 6rem;
+  margin: 0;
+}
+
 #x-cols-container label,
 #limits-container .limit-row label {
   display: inline-block;
