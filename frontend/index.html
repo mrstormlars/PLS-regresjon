@@ -84,6 +84,9 @@
 
     <div id="key-figures"></div>
 
+    <button id="export-report-button" disabled>Eksporter rapport (HTML)</button>
+    <p id="export-report-status" class="status"></p>
+
     <h3>RMSEP/RMSEC vs. antall komponenter</h3>
     <div id="rmse-chart" class="plot"></div>
 
@@ -95,6 +98,20 @@
     <div id="scores-chart" class="plot"></div>
 
     <h3>Koeffisienter</h3>
+    <p>
+      <label style="display: inline-block; font-weight: normal;">
+        <input type="radio" name="coef-view" value="normalized" id="coef-view-normalized" checked />
+        Normaliserte
+      </label>
+      <label style="display: inline-block; font-weight: normal; margin-left: 1rem;">
+        <input type="radio" name="coef-view" value="raw" id="coef-view-raw" />
+        Rå
+      </label>
+    </p>
+    <p class="status">
+      Merk: koeffisienter for log10-transformerte variabler gjelder log10-verdien av
+      variabelen, ikke den opprinnelige verdien.
+    </p>
     <p class="status">Klikk på en søyle for å markere en kolonne, Ctrl+klikk for å legge til/fjerne, eller dra for å markere flere.</p>
     <div id="coefficients-chart" class="plot"></div>
 
