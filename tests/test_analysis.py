@@ -290,3 +290,61 @@ def test_optimize_variables_reports_too_few_variables_when_natural_bound_hit():
     )
     assert len(result["history"]) == 4  # 5 available vars - 1 remaining
     assert result["stop_reason"] == "too_few_variables"
+
+
+def test_run_analysis_raw_coefficients_recover_true_linear_betas():
+    rng = np.random.default_rng(0)
+    n = 50
+    x1 = rng.normal(loc=10, scale=3, size=n)
+    x2 = rng.normal(loc=-5, scale=2, size=n)
+    true_intercept, true_b1, true_b2 = 7.0, 2.5, -1.3
+    y = true_intercept + true_b1 * x1 + true_b2 * x2 + rng.normal(scale=0.01, size=n)
+    df = pd.DataFrame({"X1": x1, "X2": x2, "Y": y})
+
+    result = analysis.run_analysis(df, y_col="Y", max_components=2, cv_folds=5)
+
+    assert result["coefficients_raw"]["X1"] == pytest.approx(true_b1, abs=0.05)
+    assert result["coefficients_raw"]["X2"] == pytest.approx(true_b2, abs=0.05)
+    assert result["intercept"] == pytest.approx(true_intercept, abs=0.05)
+
+
+def _raw_coefficient_equivalence_max_error(
+    df: pd.DataFrame, result: dict, x_cols: list[str], y_series: pd.Series
+) -> float:
+    """Recomputes the raw-scale calibration prediction two ways and returns
+    the largest discrepancy across all rows: once from the standardized
+    y_pred_cal reported in diagnostics (converted back to the y_series'
+    raw/post-log10 scale using the same mean/std normalize_data would use),
+    and once from intercept + sum(coefficients_raw[j] * raw_x_j).
+    """
+    y_std = y_series.std()
+    y_mean = y_series.mean()
+    max_error = 0.0
+    for i, (_, row) in enumerate(df.reset_index(drop=True).iterrows()):
+        diag = result["diagnostics"][i]
+        expected = diag["y_pred_cal"] * y_std + y_mean
+        actual = result["intercept"] + sum(
+            result["coefficients_raw"][c] * row[c] for c in x_cols
+        )
+        max_error = max(max_error, abs(actual - expected))
+    return max_error
+
+
+def test_run_analysis_raw_coefficients_equivalent_to_calibration_prediction():
+    df = make_signal_dataset(n_rows=40)
+    result = analysis.run_analysis(df, y_col="Y", max_components=3, cv_folds=5)
+    x_cols = [c for c in df.columns if c != "Y"]
+    max_error = _raw_coefficient_equivalence_max_error(df, result, x_cols, df["Y"])
+    assert max_error < 1e-8
+
+
+def test_run_analysis_raw_coefficients_equivalent_on_log_y_scale():
+    df = make_signal_dataset(n_rows=40)
+    df["Y"] = np.abs(df["Y"]) + 1.0  # strictly positive for log10
+    result = analysis.run_analysis(
+        df, y_col="Y", log_y=True, max_components=3, cv_folds=5
+    )
+    x_cols = [c for c in df.columns if c != "Y"]
+    log_y = np.log10(df["Y"])
+    max_error = _raw_coefficient_equivalence_max_error(df, result, x_cols, log_y)
+    assert max_error < 1e-8

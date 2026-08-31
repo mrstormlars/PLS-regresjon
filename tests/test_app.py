@@ -166,9 +166,12 @@ def test_analyze_success_returns_expected_fields():
         "scores",
         "loadings",
         "coefficients",
+        "coefficients_raw",
+        "intercept",
         "diagnostics",
     ):
         assert key in body
+    assert set(body["coefficients_raw"]) == set(body["coefficients"])
 
 
 def test_analyze_excluded_rows_use_excel_row_numbers():
@@ -330,6 +333,9 @@ def test_optimize_removes_noise_variables_and_returns_expected_shape():
     assert body["stop_reason"] in {"converged", "too_few_variables", "max_iterations"}
     for key in ("rmse_per_component", "optimal_components", "r2_cal", "diagnostics"):
         assert key in body["results"]
+    # /api/optimize's embedded results inherit the raw-coefficient fields.
+    assert "Signal" in body["results"]["coefficients_raw"]
+    assert isinstance(body["results"]["intercept"], float)
 
 
 def test_optimize_rejects_fewer_than_two_x_variables_returns_400():
