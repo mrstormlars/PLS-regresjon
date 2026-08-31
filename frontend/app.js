@@ -27,6 +27,10 @@ const state = {
   // "normalized" or "raw" - which coefficient scale the bar chart shows.
   coefficientView: "normalized",
   simulateDebounceTimer: null,
+  // Last successful /api/simulate response (plus the changes that produced
+  // it), in the shape /api/report expects. Cleared on "Nullstill" and on
+  // every new analysis so a stale simulation is never exported.
+  lastSimulation: null,
 };
 
 const el = (id) => document.getElementById(id);
@@ -797,6 +801,7 @@ el("export-report-button").addEventListener("click", async () => {
       body: JSON.stringify({
         result: state.lastAnalyzeResult,
         settings: buildReportSettings(),
+        simulation: state.lastSimulation,
       }),
     });
     if (!response.ok) {
@@ -833,6 +838,7 @@ function renderResults(result) {
   state.selectedRows.clear();
   state.selectedCols.clear();
   state.coefficientView = "normalized";
+  state.lastSimulation = null; // a new analysis invalidates any prior simulation
   el("coef-view-normalized").checked = true;
 
   renderKeyFigures(result);
@@ -1263,6 +1269,7 @@ async function runSimulate() {
   const result = state.lastAnalyzeResult;
   if (!result) return;
   const payload = state.lastAnalyzePayload || {};
+  const changes = collectSimulationChanges();
 
   try {
     const data = await postJson("/api/simulate", {
@@ -1271,12 +1278,25 @@ async function runSimulate() {
       x_means_raw: result.x_means_raw,
       log_y: payload.log_y || false,
       log_x_cols: payload.log_x_cols || [],
-      changes: collectSimulationChanges(),
+      changes,
     });
     el("sim-y-value").textContent = data.y_new.toFixed(4);
     el("sim-y-delta").textContent = data.delta.toFixed(4);
     el("sim-y-delta-pct").textContent = `${data.delta_percent.toFixed(2)} %`;
     setStatus("simulation-status", "");
+
+    // Tracked for report export in the shape /api/report expects. An empty
+    // change set means "no simulation" - matches /api/report's own rule
+    // that an absent/empty simulation omits the report section entirely.
+    state.lastSimulation = Object.keys(changes).length
+      ? {
+          changes,
+          y_base: data.y_base,
+          y_new: data.y_new,
+          delta: data.delta,
+          delta_percent: data.delta_percent,
+        }
+      : null;
   } catch (err) {
     setStatus("simulation-status", err.message, true);
   }
@@ -1286,5 +1306,6 @@ el("simulation-reset-button").addEventListener("click", () => {
   for (const input of document.querySelectorAll(".sim-change-input")) input.value = "";
   for (const select of document.querySelectorAll(".sim-mode-select")) select.value = "absolute";
   setStatus("simulation-status", "");
+  state.lastSimulation = null; // clear synchronously; runSimulate() below confirms it
   runSimulate();
 });
