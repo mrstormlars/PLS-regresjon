@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 import numpy as np
+import pytest
 from fastapi.testclient import TestClient
 
 from backend import config
@@ -527,3 +528,111 @@ def test_report_rejects_empty_result():
     )
     assert response.status_code == 400
     assert "mangler" in response.json()["detail"].lower()
+
+
+def _missing_value_csv_content():
+    lines = ["X1,X2,Y"]
+    for i in range(1, 16):
+        x1 = "" if i == 1 else ("bad" if i == 2 else str(float(i)))
+        x2 = "" if i == 3 else str(float(i) * 2)
+        y = "" if i == 4 else str(float(i) * 3)
+        lines.append(f"{x1},{x2},{y}")
+    return ("\n".join(lines) + "\n").encode()
+
+
+def test_analyze_reports_missing_value_counts_by_column():
+    content = _missing_value_csv_content()
+    file_id = _upload("missing.csv", content, content_type="text/csv").json()["file_id"]
+    response = client.post(
+        "/api/analyze",
+        json={
+            "file_id": file_id,
+            "sheet": "CSV",
+            "header_row": 1,
+            "y_col": "Y",
+            "max_components": 1,
+            "cv_folds": 3,
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["n_rows_dropped_missing"] == 4
+    assert body["missing_by_column"] == {"X1": 2, "X2": 1, "Y": 1}
+
+
+def test_analyze_clean_data_has_no_missing_values():
+    result = _analyze_sample_result()
+    assert result["n_rows_dropped_missing"] == 0
+    assert result["missing_by_column"] == {}
+
+
+def test_analyze_response_includes_simulation_baseline_fields():
+    result = _analyze_sample_result()
+    assert set(result["x_means_raw"]) == set(result["coefficients_raw"])
+    assert isinstance(result["y_baseline_raw"], float)
+
+
+def test_simulate_endpoint_percent_and_absolute_change():
+    result = _analyze_sample_result()
+    var = next(iter(result["coefficients_raw"]))
+    response = client.post(
+        "/api/simulate",
+        json={
+            "intercept": result["intercept"],
+            "coefficients_raw": result["coefficients_raw"],
+            "x_means_raw": result["x_means_raw"],
+            "log_y": False,
+            "log_x_cols": [],
+            "changes": {var: {"mode": "percent", "value": 10.0}},
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["y_base"] == pytest.approx(result["y_baseline_raw"], abs=1e-6)
+    for key in ("y_new", "delta", "delta_percent", "contributions"):
+        assert key in body
+
+
+def test_simulate_endpoint_rejects_unknown_variable():
+    result = _analyze_sample_result()
+    response = client.post(
+        "/api/simulate",
+        json={
+            "intercept": result["intercept"],
+            "coefficients_raw": result["coefficients_raw"],
+            "x_means_raw": result["x_means_raw"],
+            "changes": {"DoesNotExist": {"mode": "absolute", "value": 1.0}},
+        },
+    )
+    assert response.status_code == 400
+    assert "Ukjent variabel" in response.json()["detail"]
+
+
+def test_simulate_endpoint_rejects_non_positive_log_x_value():
+    response = client.post(
+        "/api/simulate",
+        json={
+            "intercept": 1.0,
+            "coefficients_raw": {"X1": 2.0},
+            "x_means_raw": {"X1": 10.0},
+            "log_x_cols": ["X1"],
+            "changes": {"X1": {"mode": "absolute", "value": -100.0}},
+        },
+    )
+    assert response.status_code == 400
+    assert "positiv" in response.json()["detail"]
+
+
+def test_simulate_endpoint_empty_changes_returns_no_change():
+    response = client.post(
+        "/api/simulate",
+        json={
+            "intercept": 1.0,
+            "coefficients_raw": {"X1": 2.0, "X2": -1.0},
+            "x_means_raw": {"X1": 10.0, "X2": 5.0},
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["y_new"] == body["y_base"]
+    assert body["delta"] == 0.0

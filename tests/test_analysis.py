@@ -372,3 +372,139 @@ def test_run_analysis_raw_coefficients_equivalent_with_log_x_cols():
 
     max_error = _raw_coefficient_equivalence_max_error(raw_df, result, x_cols, df["Y"])
     assert max_error < 1e-8
+
+
+def _missing_value_dataset(n_rows: int = 15) -> pd.DataFrame:
+    """15-row dataset with deliberate gaps: X1 has a blank cell and a
+    non-numeric "bad" cell (2 invalid), X2 has a blank cell (1 invalid), Y
+    has a blank cell (1 invalid) - each in a different row, so 4 distinct
+    rows are dropped and 11 remain (>= MIN_VALID_ROWS).
+    """
+    x1 = [float(i) for i in range(1, n_rows + 1)]
+    x2 = [float(i) * 2 for i in range(1, n_rows + 1)]
+    y = [float(i) * 3 for i in range(1, n_rows + 1)]
+    df = pd.DataFrame({"X1": x1, "X2": x2, "Y": y}).astype(object)
+    df.loc[0, "X1"] = None
+    df.loc[1, "X1"] = "bad"
+    df.loc[2, "X2"] = None
+    df.loc[3, "Y"] = None
+    return df
+
+
+def test_run_analysis_reports_missing_values_by_column():
+    df = _missing_value_dataset()
+    result = analysis.run_analysis(df, y_col="Y", max_components=1, cv_folds=3)
+    assert result["n_rows_dropped_missing"] == 4
+    assert result["missing_by_column"] == {"X1": 2, "X2": 1, "Y": 1}
+
+
+def test_run_analysis_clean_data_reports_no_missing_values():
+    df = make_signal_dataset(n_rows=30)
+    result = analysis.run_analysis(df, y_col="Y", max_components=2, cv_folds=3)
+    assert result["n_rows_dropped_missing"] == 0
+    assert result["missing_by_column"] == {}
+
+
+def test_run_analysis_y_baseline_raw_matches_manual_prediction():
+    df = make_signal_dataset(n_rows=30)
+    result = analysis.run_analysis(df, y_col="Y", max_components=2, cv_folds=3)
+    manual = result["intercept"] + sum(
+        result["coefficients_raw"][c] * result["x_means_raw"][c]
+        for c in result["coefficients_raw"]
+    )
+    assert result["y_baseline_raw"] == pytest.approx(manual, abs=1e-8)
+
+
+def test_run_analysis_y_baseline_raw_back_transforms_when_log_y():
+    df = make_signal_dataset(n_rows=30)
+    df["Y"] = np.abs(df["Y"]) + 1.0
+    result = analysis.run_analysis(
+        df, y_col="Y", log_y=True, max_components=2, cv_folds=3
+    )
+    manual_log = result["intercept"] + sum(
+        result["coefficients_raw"][c] * result["x_means_raw"][c]
+        for c in result["coefficients_raw"]
+    )
+    assert result["y_baseline_raw"] == pytest.approx(10**manual_log, abs=1e-8)
+
+
+def test_simulate_change_linear_delta_is_exact():
+    result = analysis.simulate_change(
+        intercept=10.0,
+        coefficients_raw={"X1": 2.0, "X2": -1.5},
+        x_means_raw={"X1": 50.0, "X2": 20.0},
+        log_y=False,
+        log_x_cols=[],
+        changes={"X1": {"mode": "absolute", "value": 5.0}},
+    )
+    assert result["delta"] == pytest.approx(2.0 * 5.0, abs=1e-8)
+    assert result["y_new"] == pytest.approx(result["y_base"] + 10.0, abs=1e-8)
+
+
+def test_simulate_change_log_y_multiplicative_effect():
+    intercept = 1.0
+    coefficients_raw = {"X1": 0.3}
+    x_means_raw = {"X1": 100.0}
+    result = analysis.simulate_change(
+        intercept,
+        coefficients_raw,
+        x_means_raw,
+        log_y=True,
+        log_x_cols=[],
+        changes={"X1": {"mode": "percent", "value": 10.0}},
+    )
+    y_base_expected = 10 ** (intercept + 0.3 * 100.0)
+    y_new_expected = 10 ** (intercept + 0.3 * 110.0)
+    assert result["y_base"] == pytest.approx(y_base_expected, rel=1e-8)
+    assert result["y_new"] == pytest.approx(y_new_expected, rel=1e-8)
+
+
+def test_simulate_change_log_x_contribution_uses_log10_difference():
+    result = analysis.simulate_change(
+        intercept=2.0,
+        coefficients_raw={"X1": 5.0},
+        x_means_raw={"X1": 100.0},
+        log_y=False,
+        log_x_cols=["X1"],
+        changes={"X1": {"mode": "absolute", "value": 900.0}},
+    )
+    expected = 5.0 * (np.log10(1000.0) - np.log10(100.0))
+    assert result["contributions"]["X1"] == pytest.approx(expected, abs=1e-8)
+
+
+def test_simulate_change_rejects_non_positive_log_x_value():
+    with pytest.raises(ValidationError, match="positiv"):
+        analysis.simulate_change(
+            intercept=2.0,
+            coefficients_raw={"X1": 5.0},
+            x_means_raw={"X1": 100.0},
+            log_y=False,
+            log_x_cols=["X1"],
+            changes={"X1": {"mode": "absolute", "value": -1000.0}},
+        )
+
+
+def test_simulate_change_rejects_unknown_variable():
+    with pytest.raises(ValidationError, match="Ukjent variabel"):
+        analysis.simulate_change(
+            intercept=2.0,
+            coefficients_raw={"X1": 5.0},
+            x_means_raw={"X1": 100.0},
+            log_y=False,
+            log_x_cols=[],
+            changes={"X99": {"mode": "absolute", "value": 1.0}},
+        )
+
+
+def test_simulate_change_empty_changes_is_a_no_op():
+    result = analysis.simulate_change(
+        intercept=2.0,
+        coefficients_raw={"X1": 5.0, "X2": -1.0},
+        x_means_raw={"X1": 100.0, "X2": 10.0},
+        log_y=False,
+        log_x_cols=[],
+        changes={},
+    )
+    assert result["y_new"] == result["y_base"]
+    assert result["delta"] == 0.0
+    assert result["contributions"] == {}
