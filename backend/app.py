@@ -93,14 +93,25 @@ class ReportSettings(BaseModel):
     max_components: int = config.MAX_COMPONENTS_DEFAULT
 
 
-class ReportRequest(BaseModel):
-    result: dict
-    settings: ReportSettings
-
-
 class SimulateChangeEntry(BaseModel):
     mode: str
     value: float
+
+
+class SimulationPayload(BaseModel):
+    """The last /api/simulate state, as held by the frontend at export time."""
+
+    changes: dict[str, SimulateChangeEntry] = {}
+    y_base: float
+    y_new: float
+    delta: float
+    delta_percent: float
+
+
+class ReportRequest(BaseModel):
+    result: dict
+    settings: ReportSettings
+    simulation: SimulationPayload | None = None
 
 
 class SimulateRequest(BaseModel):
@@ -283,8 +294,9 @@ async def generate_report(request: ReportRequest):
             status_code=400, detail="Analyseresultatet mangler eller er ufullstendig."
         )
 
+    simulation = request.simulation.model_dump() if request.simulation else None
     html_report = report.build_report_html(
-        request.result, request.settings.model_dump()
+        request.result, request.settings.model_dump(), simulation
     )
     filename = report.report_filename()
     return Response(

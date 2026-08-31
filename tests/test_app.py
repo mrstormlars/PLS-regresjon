@@ -484,10 +484,13 @@ def test_report_returns_self_contained_html_with_all_sections():
         "Forbehandling",
         "Fjernede rader",
         "Fjernede variabler",
+        "RMSEP og RMSEC vs. antall komponenter",
         "Koeffisienter",
         "Predikert vs. målt",
     ):
         assert heading in document
+    # No simulation was sent, so the section must be entirely absent.
+    assert "Simulering" not in document
 
     # Coefficient values and RMSEC/RMSEP/R² figures appear as literal text.
     optimal = result["optimal_components"]
@@ -502,6 +505,12 @@ def test_report_returns_self_contained_html_with_all_sections():
     assert f"{result['r2_cal']:.4f}" in document
     for value in result["coefficients_raw"].values():
         assert f"{value:.4f}" in document
+
+    # RMSE-vs-components plot: both series and the chosen-components marker.
+    assert 'id="rmse-plot"' in document
+    for entry in result["rmse_per_component"]:
+        assert str(entry["components"]) in document
+    assert f"Valgt: {optimal} komponenter" in document
 
     # No ACTIVE external resource reference: the vendored plotly.min.js is
     # inlined (no <script src=...>), and it itself contains benign
@@ -560,6 +569,56 @@ def test_report_shows_missing_value_counts_for_dirty_data():
     assert "X1: 2" in document
     assert "X2: 1" in document
     assert "Y: 1" in document
+
+
+def test_report_includes_simulation_section_with_exact_numbers():
+    result = _analyze_sample_result()
+    var = next(iter(result["coefficients_raw"]))
+    simulation = {
+        "changes": {var: {"mode": "percent", "value": 10.0}},
+        "y_base": result["y_baseline_raw"],
+        "y_new": result["y_baseline_raw"] + 2.5,
+        "delta": 2.5,
+        "delta_percent": 12.34,
+    }
+    response = client.post(
+        "/api/report",
+        json={
+            "result": result,
+            "settings": _report_settings(),
+            "simulation": simulation,
+        },
+    )
+    assert response.status_code == 200
+    document = response.text
+    assert "Simulering" in document
+    assert var in document
+    assert "10.0000 %" in document
+    assert f"{simulation['y_base']:.4f}" in document
+    assert f"{simulation['y_new']:.4f}" in document
+    assert "2.5000" in document
+    assert "12.34" in document
+
+
+def test_report_omits_simulation_section_when_changes_empty():
+    result = _analyze_sample_result()
+    simulation = {
+        "changes": {},
+        "y_base": result["y_baseline_raw"],
+        "y_new": result["y_baseline_raw"],
+        "delta": 0.0,
+        "delta_percent": 0.0,
+    }
+    response = client.post(
+        "/api/report",
+        json={
+            "result": result,
+            "settings": _report_settings(),
+            "simulation": simulation,
+        },
+    )
+    assert response.status_code == 200
+    assert "Simulering" not in response.text
 
 
 def test_report_rejects_empty_result():
