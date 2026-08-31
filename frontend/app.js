@@ -6,6 +6,7 @@ const SELECTION_COLOR = "#e6308a";
 
 const state = {
   fileId: null,
+  fileName: null,
   sheets: [],
   columns: [],
   yCol: null,
@@ -22,6 +23,8 @@ const state = {
   lastAnalyzePayload: null,
   lastAnalyzeResult: null,
   lastOptimizeResult: null,
+  // "normalized" or "raw" - which coefficient scale the bar chart shows.
+  coefficientView: "normalized",
 };
 
 const el = (id) => document.getElementById(id);
@@ -83,6 +86,7 @@ el("upload-button").addEventListener("click", async () => {
       throw new Error(data.detail || "Ukjent feil ved opplasting.");
     }
     state.fileId = data.file_id;
+    state.fileName = fileInput.files[0].name;
     state.sheets = data.sheets;
 
     const sheetSelect = el("sheet-select");
@@ -758,6 +762,67 @@ el("apply-optimized-button").addEventListener("click", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Report export.
+// ---------------------------------------------------------------------------
+
+function buildReportSettings() {
+  const payload = state.lastAnalyzePayload || {};
+  return {
+    file_name: state.fileName || "ukjent-fil",
+    sheet: payload.sheet,
+    header_row: payload.header_row,
+    start_row: payload.start_row,
+    end_row: payload.end_row,
+    start_col: payload.start_col,
+    end_col: payload.end_col,
+    limits: payload.limits || {},
+    log_y: payload.log_y || false,
+    log_x_cols: payload.log_x_cols || [],
+    excluded_rows: payload.excluded_rows || [],
+    excluded_cols: payload.excluded_cols || [],
+    cv_folds: payload.cv_folds,
+    max_components: payload.max_components,
+  };
+}
+
+el("export-report-button").addEventListener("click", async () => {
+  if (!state.lastAnalyzeResult) return;
+  setStatus("export-report-status", "Genererer rapport...");
+  try {
+    const response = await fetch("/api/report", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        result: state.lastAnalyzeResult,
+        settings: buildReportSettings(),
+      }),
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.detail || "Kunne ikke generere rapport.");
+    }
+
+    const blob = await response.blob();
+    const disposition = response.headers.get("Content-Disposition") || "";
+    const match = disposition.match(/filename="?([^"]+)"?/);
+    const filename = match ? match[1] : "pls-rapport.html";
+
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+
+    setStatus("export-report-status", "Rapporten ble lastet ned.");
+  } catch (err) {
+    setStatus("export-report-status", err.message, true);
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Result rendering (Plotly).
 // ---------------------------------------------------------------------------
 
@@ -765,6 +830,8 @@ function renderResults(result) {
   state.lastAnalyzeResult = result;
   state.selectedRows.clear();
   state.selectedCols.clear();
+  state.coefficientView = "normalized";
+  el("coef-view-normalized").checked = true;
 
   renderKeyFigures(result);
   renderRmseChart(result);
@@ -778,6 +845,7 @@ function renderResults(result) {
   refreshColSelection();
   el("optimize-history-chart").classList.add("hidden");
   el("apply-optimized-button").classList.add("hidden");
+  el("export-report-button").disabled = false;
 }
 
 function renderKeyFigures(result) {
@@ -1026,10 +1094,38 @@ el("suggest-outlier-method-select").addEventListener("change", updateOutlierMapG
 el("suggest-outlier-threshold-input").addEventListener("input", updateOutlierMapGuide);
 
 function renderCoefficientsChart(result) {
-  const entries = Object.entries(result.coefficients);
+  const isRaw = state.coefficientView === "raw";
+  const source = isRaw ? result.coefficients_raw : result.coefficients;
+  const entries = Object.entries(source);
+  // Column identifiers (customdata) are the same variable names regardless
+  // of view, so the COLUMN selection domain works unchanged in both modes.
   const cols = entries.map(([name]) => name);
   const values = entries.map(([, value]) => value);
   const baseColors = values.map((value) => (value < 0 ? "#d62728" : "#1f77b4"));
+
+  const layout = {
+    title: isRaw ? "Koeffisienter (rå skala)" : "Koeffisienter (normalisert)",
+    xaxis: { title: "Variabel" },
+    yaxis: { title: "Koeffisientverdi" },
+    dragmode: "select",
+  };
+  if (isRaw) {
+    layout.annotations = [
+      {
+        xref: "paper",
+        yref: "paper",
+        x: 0.02,
+        y: 0.98,
+        xanchor: "left",
+        yanchor: "top",
+        showarrow: false,
+        bgcolor: "rgba(255,255,255,0.85)",
+        bordercolor: "#333",
+        borderwidth: 1,
+        text: `Intercept: ${result.intercept.toFixed(4)}`,
+      },
+    ];
+  }
 
   Plotly.newPlot(
     "coefficients-chart",
@@ -1041,15 +1137,21 @@ function renderCoefficientsChart(result) {
         marker: { color: baseColors },
       },
     ],
-    {
-      title: "Koeffisienter",
-      xaxis: { title: "Variabel" },
-      yaxis: { title: "Koeffisientverdi" },
-      dragmode: "select",
-    },
+    layout,
     PLOTLY_CONFIG
   );
 
   state.plotMeta["coefficients-chart"] = { customData: [cols], baseColors: [baseColors] };
   bindColSelectionEvents("coefficients-chart");
+  refreshColSelection();
 }
+
+el("coef-view-normalized").addEventListener("change", () => {
+  state.coefficientView = "normalized";
+  if (state.lastAnalyzeResult) renderCoefficientsChart(state.lastAnalyzeResult);
+});
+
+el("coef-view-raw").addEventListener("change", () => {
+  state.coefficientView = "raw";
+  if (state.lastAnalyzeResult) renderCoefficientsChart(state.lastAnalyzeResult);
+});

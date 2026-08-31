@@ -127,6 +127,52 @@ def _apply_limits(
     return df[mask]
 
 
+def _standardization_params(series: pd.Series) -> tuple[float, float]:
+    """Mean/std that normalize_data would use to z-score this column.
+
+    normalize_data leaves a zero-(or undefined-)variance column completely
+    unscaled (not even mean-centered), which is equivalent to using mean=0,
+    std=1 in the standardization formula.
+    """
+    mean = series.mean()
+    std = series.std()
+    if std == 0 or pd.isna(std):
+        return 0.0, 1.0
+    return float(mean), float(std)
+
+
+def _compute_raw_coefficients(
+    X: pd.DataFrame, y: pd.Series, coefficients: dict[str, float]
+) -> tuple[dict[str, float], float]:
+    """Back-scale standardized-model coefficients to the raw variable scale.
+
+    "Raw" here means post-log10 (for log-selected columns) but
+    pre-standardization - the values the user actually sees after any log
+    transform, before the z-score step.
+
+    Derivation: with x_norm_j = (x_raw_j - mean_x_j) / std_x_j and
+    y_norm = (y_raw - mean_y) / std_y, the standardized-space model is
+    y_norm_pred = sum_j(b_std_j * x_norm_j) - with NO intercept term, since
+    the final model is fit on X_norm/y_norm which are both exactly
+    mean-centered over the same rows used to fit it, so the fitted
+    hyperplane passes through the origin. Substituting and rearranging
+    into y_raw_pred = intercept + sum_j(b_raw_j * x_raw_j) gives:
+        b_raw_j = b_std_j * std_y / std_x_j
+        intercept = mean_y - sum_j(b_raw_j * mean_x_j)
+    """
+    y_mean, y_std = _standardization_params(y)
+    coefficients_raw: dict[str, float] = {}
+    x_means: dict[str, float] = {}
+    for col, b_std in coefficients.items():
+        x_mean, x_std = _standardization_params(X[col])
+        coefficients_raw[col] = b_std * y_std / x_std
+        x_means[col] = x_mean
+    intercept = y_mean - sum(
+        coefficients_raw[col] * x_means[col] for col in coefficients_raw
+    )
+    return coefficients_raw, float(intercept)
+
+
 def _compute_t2(T: np.ndarray) -> np.ndarray:
     """Compute Hotelling's T2 statistic per row from a PLS score matrix.
 
@@ -281,6 +327,7 @@ def run_analysis(
     }
 
     coefficients = {col: float(coef[i]) for i, col in enumerate(x_cols)}
+    coefficients_raw, intercept = _compute_raw_coefficients(X, y, coefficients)
 
     return {
         "rmse_per_component": [
@@ -293,6 +340,8 @@ def run_analysis(
         "scores": scores,
         "loadings": loadings,
         "coefficients": coefficients,
+        "coefficients_raw": coefficients_raw,
+        "intercept": intercept,
         "diagnostics": diagnostics,
     }
 
