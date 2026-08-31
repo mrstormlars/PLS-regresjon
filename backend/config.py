@@ -51,3 +51,6 @@ OPTIMIZE_TOLERANCE_DEFAULT = 0.0
 # is a secondary safety net only, for pathologically large variable counts;
 # hitting it is reported via stop_reason == "max_iterations", never silent.
 MAX_OPTIMIZE_ITERATIONS = 50
+
+# POST /api/report: downloaded filename is "<prefix>-<YYYY-MM-DD>.html".
+REPORT_FILENAME_PREFIX = "pls-rapport"

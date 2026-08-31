@@ -6,11 +6,11 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, HTTPException, UploadFile
+from fastapi import FastAPI, HTTPException, Response, UploadFile
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from backend import analysis, config, parsing
+from backend import analysis, config, parsing, report
 from backend.parsing import PayloadTooLargeError, ValidationError
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
@@ -74,6 +74,28 @@ class CoefficientEntry(BaseModel):
 class SuggestLowImpactRequest(BaseModel):
     coefficients: list[CoefficientEntry]
     threshold: float | None = None
+
+
+class ReportSettings(BaseModel):
+    file_name: str
+    sheet: str
+    header_row: int = config.DEFAULT_HEADER_ROW
+    start_row: int | None = None
+    end_row: int | None = None
+    start_col: int | None = None
+    end_col: int | None = None
+    limits: dict[str, LimitBounds] = {}
+    log_y: bool = False
+    log_x_cols: list[str] = []
+    excluded_rows: list[int] = []
+    excluded_cols: list[str] = []
+    cv_folds: int = config.CV_FOLDS_DEFAULT
+    max_components: int = config.MAX_COMPONENTS_DEFAULT
+
+
+class ReportRequest(BaseModel):
+    result: dict
+    settings: ReportSettings
 
 
 def _sanitize_records(df: pd.DataFrame) -> list[dict]:
@@ -216,6 +238,28 @@ async def suggest_low_impact(request: SuggestLowImpactRequest):
         coef_df, threshold=request.threshold
     )
     return {"columns": columns}
+
+
+@app.post("/api/report")
+async def generate_report(request: ReportRequest):
+    if (
+        not request.result
+        or "coefficients" not in request.result
+        or "diagnostics" not in request.result
+    ):
+        raise HTTPException(
+            status_code=400, detail="Analyseresultatet mangler eller er ufullstendig."
+        )
+
+    html_report = report.build_report_html(
+        request.result, request.settings.model_dump()
+    )
+    filename = report.report_filename()
+    return Response(
+        content=html_report,
+        media_type="text/html",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")

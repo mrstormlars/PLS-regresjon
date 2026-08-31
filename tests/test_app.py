@@ -1,5 +1,6 @@
 """End-to-end tests for the FastAPI endpoints: upload, preview, analyze."""
 
+import re
 from pathlib import Path
 
 import numpy as np
@@ -431,3 +432,98 @@ def test_suggest_low_impact_high_threshold_still_filters_by_value():
     )
     assert response.status_code == 200
     assert set(response.json()["columns"]) == {"X1", "X2", "X3"}
+
+
+def _analyze_sample_result():
+    content = (FIXTURES / "sample.xlsx").read_bytes()
+    file_id = _upload("sample.xlsx", content).json()["file_id"]
+    response = client.post(
+        "/api/analyze",
+        json={
+            "file_id": file_id,
+            "sheet": "Data1",
+            "header_row": 1,
+            "y_col": "Y",
+            "excluded_cols": ["Tid"],
+            "max_components": 2,
+            "cv_folds": 3,
+        },
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
+def _report_settings(**overrides):
+    settings = {
+        "file_name": "sample.xlsx",
+        "sheet": "Data1",
+        "header_row": 1,
+        "excluded_cols": ["Tid"],
+        "excluded_rows": [2, 5],
+        "cv_folds": 3,
+        "max_components": 2,
+    }
+    settings.update(overrides)
+    return settings
+
+
+def test_report_returns_self_contained_html_with_all_sections():
+    result = _analyze_sample_result()
+    response = client.post(
+        "/api/report", json={"result": result, "settings": _report_settings()}
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert "attachment" in response.headers["content-disposition"]
+    assert ".html" in response.headers["content-disposition"]
+
+    document = response.text
+    for heading in (
+        "Rådata",
+        "Forbehandling",
+        "Fjernede rader",
+        "Fjernede variabler",
+        "Koeffisienter",
+        "Predikert vs. målt",
+    ):
+        assert heading in document
+
+    # Coefficient values and RMSEC/RMSEP/R² figures appear as literal text.
+    optimal = result["optimal_components"]
+    rmsec = next(
+        e["rmsec"] for e in result["rmse_per_component"] if e["components"] == optimal
+    )
+    rmsep = next(
+        e["rmsep"] for e in result["rmse_per_component"] if e["components"] == optimal
+    )
+    assert f"{rmsec:.4f}" in document
+    assert f"{rmsep:.4f}" in document
+    assert f"{result['r2_cal']:.4f}" in document
+    for value in result["coefficients_raw"].values():
+        assert f"{value:.4f}" in document
+
+    # No ACTIVE external resource reference: the vendored plotly.min.js is
+    # inlined (no <script src=...>), and it itself contains benign
+    # http(s):// strings (SVG namespace URIs, a plotly.com attribution
+    # link, doc comments) that a blind substring search would flag even
+    # though they never cause a network fetch when the file is opened
+    # offline - so this checks the concrete patterns that WOULD load an
+    # external resource, not "http" appearing anywhere in the document.
+    active_reference_patterns = [
+        r'<script[^>]+src=["\']https?://',
+        r'<link[^>]+href=["\']https?://',
+        r'<img[^>]+src=["\']https?://',
+        r'<iframe[^>]+src=["\']https?://',
+        r'@import\s+url\(["\']?https?://',
+    ]
+    for pattern in active_reference_patterns:
+        assert re.search(pattern, document) is None
+    assert re.search(r"<script[^>]*\bsrc=", document) is None  # plotly is inline
+
+
+def test_report_rejects_empty_result():
+    response = client.post(
+        "/api/report", json={"result": {}, "settings": _report_settings()}
+    )
+    assert response.status_code == 400
+    assert "mangler" in response.json()["detail"].lower()
