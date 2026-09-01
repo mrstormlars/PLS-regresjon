@@ -223,6 +223,26 @@ def _rmse_section() -> str:
     """
 
 
+def _simulation_baseline(
+    base_var: str, x_means_raw: dict, x_var_bases: dict | None
+) -> float | None:
+    """Look up a base variable's raw baseline for the simulation table.
+
+    x_means_raw is keyed by MODEL-variable name, but simulation["changes"]
+    (and this lookup) is keyed by BASE name; when the base is log-only
+    (e.g. "X1" -> only "log10(X1)" is a model variable) the base name
+    itself is never a key of x_means_raw. Resolve through x_var_bases (any
+    model variable for that base carries the same base-unit baseline - see
+    run_analysis). Falls back to a direct x_means_raw.get(base_var) lookup
+    when x_var_bases is absent, so a pre-x_var_bases report payload does
+    not crash.
+    """
+    if x_var_bases is None:
+        return x_means_raw.get(base_var)
+    base_to_model = {base: model for model, base in x_var_bases.items()}
+    return x_means_raw.get(base_to_model.get(base_var, base_var))
+
+
 def _simulation_section(result: dict, simulation: dict | None) -> str:
     """Norwegian "Simulering" section for the last what-if state held by the
     frontend at export time. Entirely absent (returns "") when no
@@ -233,11 +253,12 @@ def _simulation_section(result: dict, simulation: dict | None) -> str:
         return ""
 
     x_means_raw = result.get("x_means_raw", {})
+    x_var_bases = result.get("x_var_bases")
     changes = simulation["changes"]
     rows = "".join(
         f"<tr><td>{_esc(var)}</td>"
         f"<td>{_fmt(change.get('value'))}{' %' if change.get('mode') == 'percent' else ''}</td>"
-        f"<td>{_fmt(x_means_raw.get(var))}</td></tr>"
+        f"<td>{_fmt(_simulation_baseline(var, x_means_raw, x_var_bases))}</td></tr>"
         for var, change in changes.items()
     )
 

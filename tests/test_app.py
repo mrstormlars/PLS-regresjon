@@ -294,6 +294,61 @@ def test_analyze_log_x_cols_included_base_returns_both_terms_and_x_var_bases():
     assert body["x_var_bases"]["X2"] == "X2"
 
 
+def test_analyze_payload_matches_split_model_var_selection_contract():
+    """Gap 2 backend-level substitute: frontend/app.js's
+    splitModelVarSelection (used by rerunAnalysis and the low-impact
+    suggestion click-through) is plain DOM-manipulating JS with no JS test
+    harness in this repo, so it cannot run under pytest - this is NOT a
+    test of that function itself. It instead proves the two payload shapes
+    that function is designed to produce behave correctly when sent to
+    /api/analyze:
+      - selecting the derived name "log10(X1)" -> drop "X1" from
+        log_x_cols, leave excluded_cols untouched -> only the log term is
+        removed, the linear term survives.
+      - selecting the linear name "X1" -> add "X1" to excluded_cols, leave
+        log_x_cols untouched -> only the linear term is removed, the log
+        term survives.
+    """
+    n = 30
+    csv_content = b"X1,X2,Y\n" + b"\n".join(
+        f"{i},{i * 2.0},{i * 3.0}".encode() for i in range(1, n + 1)
+    )
+    file_id = _upload(
+        "split_selection.csv", csv_content, content_type="text/csv"
+    ).json()["file_id"]
+
+    def _analyze(excluded_cols, log_x_cols):
+        return client.post(
+            "/api/analyze",
+            json={
+                "file_id": file_id,
+                "sheet": "CSV",
+                "header_row": 1,
+                "y_col": "Y",
+                "excluded_cols": excluded_cols,
+                "log_x_cols": log_x_cols,
+                "max_components": 2,
+                "cv_folds": 3,
+            },
+        )
+
+    # Selecting the derived name "log10(X1)": excluded_cols untouched,
+    # log_x_cols drops "X1".
+    response = _analyze([], [])
+    assert response.status_code == 200
+    coefficients = response.json()["coefficients"]
+    assert "X1" in coefficients
+    assert "log10(X1)" not in coefficients
+
+    # Selecting the linear name "X1": "X1" added to excluded_cols,
+    # log_x_cols untouched.
+    response = _analyze(["X1"], ["X1"])
+    assert response.status_code == 200
+    coefficients = response.json()["coefficients"]
+    assert "log10(X1)" in coefficients
+    assert "X1" not in coefficients
+
+
 def test_analyze_non_numeric_y_returns_400():
     csv_content = b"X1,X2,Y\n" + b"\n".join(
         f"{i},{i * 2},tekst{i}".encode() for i in range(1, 21)
@@ -631,6 +686,73 @@ def test_report_includes_simulation_section_with_exact_numbers():
     assert f"{simulation['y_new']:.4f}" in document
     assert "2.5000" in document
     assert "12.34" in document
+
+
+def test_report_simulation_section_shows_real_baseline_for_log_only_base():
+    # Gap 1 regression: x_means_raw is keyed by model-variable name
+    # ("log10(X1)"), but simulation["changes"] is keyed by base name
+    # ("X1") when the base is log-only - the "Basisverdi (rå)" lookup must
+    # go through x_var_bases, not treat the base name as a literal
+    # x_means_raw key (which would silently render "-" instead).
+    csv_content = b"X1,Y\n" + b"\n".join(f"{10**i},{i}".encode() for i in range(1, 21))
+    file_id = _upload("log_only.csv", csv_content, content_type="text/csv").json()[
+        "file_id"
+    ]
+    analyze_response = client.post(
+        "/api/analyze",
+        json={
+            "file_id": file_id,
+            "sheet": "CSV",
+            "header_row": 1,
+            "y_col": "Y",
+            "excluded_cols": ["X1"],
+            "log_x_cols": ["X1"],
+            "max_components": 1,
+            "cv_folds": 3,
+        },
+    )
+    result = analyze_response.json()
+    assert "X1" not in result["x_means_raw"]  # only "log10(X1)" is a model variable
+    real_baseline = result["x_means_raw"]["log10(X1)"]
+
+    simulation = {
+        "changes": {"X1": {"mode": "absolute", "value": 5.0}},
+        "y_base": result["y_baseline_raw"],
+        "y_new": result["y_baseline_raw"] + 1.0,
+        "delta": 1.0,
+        "delta_percent": 5.0,
+    }
+    response = client.post(
+        "/api/report",
+        json={
+            "result": result,
+            "settings": _report_settings(excluded_cols=["X1"], log_x_cols=["X1"]),
+            "simulation": simulation,
+        },
+    )
+    assert response.status_code == 200
+    document = response.text
+    assert f"{real_baseline:.4f}" in document
+
+
+def test_report_coefficient_transform_column_falls_back_without_x_var_bases():
+    # _is_log_term's fallback branch: an older result payload lacking
+    # "x_var_bases" must still classify log10-derived columns correctly,
+    # using settings["log_x_cols"], and must not crash.
+    result = _analyze_sample_result()
+    assert "x_var_bases" in result
+    del result["x_var_bases"]
+    log_col = next(iter(result["coefficients"]))
+    response = client.post(
+        "/api/report",
+        json={
+            "result": result,
+            "settings": _report_settings(log_x_cols=[log_col]),
+        },
+    )
+    assert response.status_code == 200
+    document = response.text
+    assert "log10" in document
 
 
 def test_report_omits_simulation_section_when_changes_empty():
