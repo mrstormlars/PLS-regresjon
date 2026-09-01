@@ -232,6 +232,7 @@ def test_analyze_log_x_cols_transforms_before_standardization():
             "sheet": "CSV",
             "header_row": 1,
             "y_col": "Y",
+            "excluded_cols": ["X1"],  # log-only: excluded from the linear term
             "log_x_cols": ["X1"],
             "max_components": 1,
             "cv_folds": 3,
@@ -260,6 +261,37 @@ def test_analyze_log_x_cols_all_non_positive_returns_400():
     )
     assert response.status_code == 400
     assert "For få gyldige rader" in response.json()["detail"]
+
+
+def test_analyze_log_x_cols_included_base_returns_both_terms_and_x_var_bases():
+    # (l) /api/analyze: X-checkbox checked AND log10 checked -> both
+    # variables in the response, plus x_var_bases mapping both to the base.
+    n = 30
+    csv_content = b"X1,X2,Y\n" + b"\n".join(
+        f"{i},{i * 2.0},{i * 3.0}".encode() for i in range(1, n + 1)
+    )
+    file_id = _upload("both_terms.csv", csv_content, content_type="text/csv").json()[
+        "file_id"
+    ]
+    response = client.post(
+        "/api/analyze",
+        json={
+            "file_id": file_id,
+            "sheet": "CSV",
+            "header_row": 1,
+            "y_col": "Y",
+            "log_x_cols": ["X1"],
+            "max_components": 2,
+            "cv_folds": 3,
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert "X1" in body["coefficients"]
+    assert "log10(X1)" in body["coefficients"]
+    assert body["x_var_bases"]["X1"] == "X1"
+    assert body["x_var_bases"]["log10(X1)"] == "X1"
+    assert body["x_var_bases"]["X2"] == "X2"
 
 
 def test_analyze_non_numeric_y_returns_400():
@@ -328,6 +360,7 @@ def test_optimize_removes_noise_variables_and_returns_expected_shape():
     body = response.json()
     assert body["final_excluded_cols"]
     assert set(body["final_excluded_cols"]).issubset({"N1", "N2", "N3", "N4"})
+    assert body["final_log_x_cols"] == []  # no log_x_cols were requested
     assert body["history"]
     for entry in body["history"]:
         assert set(entry.keys()) == {"iteration", "removed_col", "rmsep"}
@@ -681,7 +714,7 @@ def test_simulate_endpoint_percent_and_absolute_change():
             "coefficients_raw": result["coefficients_raw"],
             "x_means_raw": result["x_means_raw"],
             "log_y": False,
-            "log_x_cols": [],
+            "x_var_bases": result["x_var_bases"],
             "changes": {var: {"mode": "percent", "value": 10.0}},
         },
     )
@@ -708,18 +741,20 @@ def test_simulate_endpoint_rejects_unknown_variable():
 
 
 def test_simulate_endpoint_rejects_non_positive_log_x_value():
+    # "X1" is log-only here: its sole model variable is "log10(X1)".
     response = client.post(
         "/api/simulate",
         json={
             "intercept": 1.0,
-            "coefficients_raw": {"X1": 2.0},
-            "x_means_raw": {"X1": 10.0},
-            "log_x_cols": ["X1"],
+            "coefficients_raw": {"log10(X1)": 2.0},
+            "x_means_raw": {"log10(X1)": 10.0},
+            "x_var_bases": {"log10(X1)": "X1"},
             "changes": {"X1": {"mode": "absolute", "value": -100.0}},
         },
     )
     assert response.status_code == 400
     assert "positiv" in response.json()["detail"]
+    assert "'X1'" in response.json()["detail"]
 
 
 def test_simulate_endpoint_empty_changes_returns_no_change():
