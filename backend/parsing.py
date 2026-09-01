@@ -124,27 +124,53 @@ def _separator_consistency_score(sep: str, lines: list[str]) -> tuple[float, int
     return score, m
 
 
+def _numeric_column_count(sample: str, separator: str) -> int:
+    """Parse `sample` with `separator` (and its decimal-mark detection) and
+    count the resulting numeric-dtype columns; -1 if pandas cannot tokenize
+    the sample at all with this separator.
+    """
+    decimal = _detect_decimal(sample, separator)
+    try:
+        parsed = pd.read_csv(StringIO(sample), sep=separator, decimal=decimal)
+    except (pd.errors.ParserError, ValueError):
+        return -1
+    return parsed.select_dtypes(include="number").shape[1]
+
+
 def _detect_separator(sample: str) -> str:
     """Pick the candidate separator whose occurrence count is most
     consistent line-to-line (see _separator_consistency_score) - this is
     what distinguishes a real field separator from a decimal mark, which a
-    raw occurrence count cannot. Ties break on higher m, then earlier
-    position in config.CSV_CANDIDATE_SEPARATORS; falls back to the default
-    if no candidate scores above 0.
+    raw occurrence count cannot.
+
+    Candidates tied on that (score, m) pair are broken by which one, when
+    used to actually parse the sample, yields the most numeric-dtype
+    columns (e.g. a header containing an incidental occurrence of a
+    non-separator candidate character). Any tie still remaining prefers
+    config.CSV_DEFAULT_SEPARATOR, then earlier position in
+    config.CSV_CANDIDATE_SEPARATORS.
     """
     lines = [line for line in sample.splitlines() if line.strip()]
     if not lines:
         return config.CSV_DEFAULT_SEPARATOR
 
-    best_sep = None
-    best_score = 0.0
-    best_m = -1
-    for sep in config.CSV_CANDIDATE_SEPARATORS:
-        score, m = _separator_consistency_score(sep, lines)
-        if score > best_score or (score == best_score and m > best_m):
-            best_sep, best_score, best_m = sep, score, m
+    scored = [
+        (sep, *_separator_consistency_score(sep, lines))
+        for sep in config.CSV_CANDIDATE_SEPARATORS
+    ]
+    best_score = max(score for _, score, _ in scored)
+    tied_on_score = [(sep, m) for sep, score, m in scored if score == best_score]
+    best_m = max(m for _, m in tied_on_score)
+    candidates = [sep for sep, m in tied_on_score if m == best_m]
 
-    return best_sep if best_sep is not None else config.CSV_DEFAULT_SEPARATOR
+    if len(candidates) > 1:
+        numeric_counts = {sep: _numeric_column_count(sample, sep) for sep in candidates}
+        best_numeric = max(numeric_counts.values())
+        candidates = [sep for sep in candidates if numeric_counts[sep] == best_numeric]
+
+    if config.CSV_DEFAULT_SEPARATOR in candidates:
+        return config.CSV_DEFAULT_SEPARATOR
+    return candidates[0]
 
 
 def _detect_decimal(sample: str, separator: str) -> str:

@@ -243,6 +243,44 @@ def test_detect_separator_semicolon_wins_when_every_column_has_decimal_commas():
     assert df["Y"].iloc[0] == pytest.approx(3.0)
 
 
+def test_detect_separator_tie_breaks_to_comma_when_it_yields_numeric_column():
+    # ";" and "," both score 1.000 with m=1 here (the header's stray ";"
+    # inside "Region,Population" ties the count with the "," itself). The
+    # numeric tie-break must prefer ",": parsing with "," yields a numeric
+    # Population column, parsing with ";" does not.
+    content = (
+        b"City;Region,Population\n"
+        b"Oslo; Norway,50000\n"
+        b"Bergen; Norway,10000\n"
+        b"Trondheim; Norway,20000\n"
+    )
+    sample = parsing._sniff_sample(content)
+    assert parsing._detect_separator(sample) == ","
+
+    df = parsing.read_sheet(
+        "counterexample.csv", content, parsing.CSV_SHEET_NAME, header_row=1
+    )
+    assert list(df.columns) == ["City;Region", "Population"]
+    assert df["Population"].dtype.kind in "if"
+
+
+def test_detect_separator_tie_breaks_to_semicolon_when_it_yields_numeric_column():
+    # Mirror of the above, pulling the opposite way: "," and ";" both score
+    # 1.000 with m=1 (the header's stray "," inside "Navn, sted" ties the
+    # count with the ";" itself). Parsing with ";" yields a numeric Verdi
+    # column, parsing with "," does not - so the tie-break must not simply
+    # always prefer comma.
+    content = b"Navn, sted;Verdi\nOslo, Norge;100\nBergen, Norge;200\n"
+    sample = parsing._sniff_sample(content)
+    assert parsing._detect_separator(sample) == ";"
+
+    df = parsing.read_sheet(
+        "counterexample.csv", content, parsing.CSV_SHEET_NAME, header_row=1
+    )
+    assert list(df.columns) == ["Navn, sted", "Verdi"]
+    assert df["Verdi"].dtype.kind in "if"
+
+
 def test_read_raw_title_row_fallback_row_count_matches_physical_lines():
     # Pins the _count_csv_rows fallback: when the header=None counting
     # attempt can't tokenize a ragged preamble row, it must fall back to a
