@@ -892,3 +892,45 @@ def test_simulate_endpoint_empty_changes_returns_no_change():
     body = response.json()
     assert body["y_new"] == body["y_base"]
     assert body["delta"] == 0.0
+
+
+def test_static_top_level_file_has_no_cache_cache_control():
+    response = client.get("/app.js")
+    assert response.status_code == 200
+    assert response.headers.get("cache-control") == "no-cache"
+
+
+def test_static_top_level_file_cache_control_is_not_no_store():
+    response = client.get("/app.js")
+    cache_control = response.headers.get("cache-control", "")
+    assert "no-store" not in cache_control
+
+
+def test_static_top_level_file_supports_etag_revalidation():
+    first = client.get("/app.js")
+    etag = first.headers["etag"]
+    second = client.get("/app.js", headers={"If-None-Match": etag})
+    assert second.status_code == 304
+    assert second.content == b""
+
+
+def test_static_nested_vendor_file_has_same_cache_properties():
+    response = client.get("/vendor/plotly.min.js")
+    assert response.status_code == 200
+    cache_control = response.headers.get("cache-control")
+    assert cache_control == "no-cache"
+    assert "no-store" not in cache_control
+
+    etag = response.headers["etag"]
+    revalidated = client.get("/vendor/plotly.min.js", headers={"If-None-Match": etag})
+    assert revalidated.status_code == 304
+    assert revalidated.content == b""
+
+
+def test_api_endpoint_response_has_no_cache_control_header_added():
+    response = client.post(
+        "/api/suggest-low-impact",
+        json={"coefficients": _coefficients_payload(), "threshold": 0.1},
+    )
+    assert response.status_code == 200
+    assert "cache-control" not in response.headers
