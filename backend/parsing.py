@@ -149,6 +149,21 @@ def _detect_separator(sample: str) -> str:
     non-separator candidate character). Any tie still remaining prefers
     config.CSV_DEFAULT_SEPARATOR, then earlier position in
     config.CSV_CANDIDATE_SEPARATORS.
+
+    Known limitation: this rule cannot disambiguate a file where a rival
+    separator appears in the values or header at the same per-line
+    frequency AND both candidates yield the same numeric-column count.
+    Concrete case: "By;Verdi,type" / "Oslo;12,34" / "Bergen;56,78". `;`
+    and `,` tie on consistency score, on modal count, and even on numeric-
+    column count - the last tie happens because splitting a comma-decimal
+    value on its own decimal comma yields two integer-looking fragments
+    ("12,34" -> "12" and "34"). The fallback then picks
+    config.CSV_DEFAULT_SEPARATOR, which is wrong here: the file is
+    semicolon-separated. This is not fixable by another tie-break - the
+    same bytes are a valid comma-separated file and a valid
+    semicolon-separated file, and only knowing what the column names mean
+    settles it. The planned resolution is a user-facing override of
+    separator and decimal mark, not a further heuristic.
     """
     lines = [line for line in sample.splitlines() if line.strip()]
     if not lines:
