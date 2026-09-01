@@ -160,16 +160,29 @@ def _removed_variables_section(settings: dict) -> str:
     """
 
 
+def _is_log_term(col: str, x_var_bases: dict | None, log_x_cols: set[str]) -> bool:
+    """True if a coefficient-table column is a log10-derived model variable.
+
+    Prefers the newer x_var_bases mapping (model_var != base_var means a
+    log10-derived term); falls back to the older log_x_cols set from
+    settings so a pre-x_var_bases report payload does not crash.
+    """
+    if x_var_bases is not None:
+        return x_var_bases.get(col, col) != col
+    return col in log_x_cols
+
+
 def _coefficients_section(result: dict, settings: dict) -> str:
     coefficients = result.get("coefficients", {})
     coefficients_raw = result.get("coefficients_raw", {})
     intercept = result.get("intercept")
+    x_var_bases = result.get("x_var_bases")
     log_x_cols = set(settings.get("log_x_cols") or [])
 
     rows = "".join(
         f"<tr><td>{_esc(col)}</td><td>{_fmt(coefficients.get(col))}</td>"
         f"<td>{_fmt(coefficients_raw.get(col))}</td>"
-        f"<td>{'log10' if col in log_x_cols else '-'}</td></tr>"
+        f"<td>{'log10' if _is_log_term(col, x_var_bases, log_x_cols) else '-'}</td></tr>"
         for col in coefficients
     )
 
