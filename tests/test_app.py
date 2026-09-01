@@ -927,6 +927,44 @@ def test_static_nested_vendor_file_has_same_cache_properties():
     assert revalidated.content == b""
 
 
+def test_preview_semicolon_csv_returns_separate_columns():
+    content = b"Tid;Y;X1;X2\n1;1,5;2,5;3,5\n2;2,5;3,5;4,5\n"
+    file_id = _upload("semi.csv", content, content_type="text/csv").json()["file_id"]
+    response = client.post(
+        "/api/preview", json={"file_id": file_id, "sheet": "CSV", "header_row": 1}
+    )
+    assert response.status_code == 200
+    assert response.json()["columns"] == ["Tid", "Y", "X1", "X2"]
+
+
+def _semicolon_analyze_csv_content():
+    n = config.MIN_VALID_ROWS + 5
+    lines = ["X1;X2;Y"]
+    for i in range(1, n + 1):
+        lines.append(f"{i},0;{i * 2},0;{i * 3},0")
+    return ("\n".join(lines) + "\n").encode()
+
+
+def test_analyze_semicolon_csv_with_comma_decimals_produces_successful_fit():
+    content = _semicolon_analyze_csv_content()
+    file_id = _upload("semi_analyze.csv", content, content_type="text/csv").json()[
+        "file_id"
+    ]
+    response = client.post(
+        "/api/analyze",
+        json={
+            "file_id": file_id,
+            "sheet": "CSV",
+            "header_row": 1,
+            "y_col": "Y",
+            "max_components": 1,
+            "cv_folds": 3,
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["r2_cal"] > 0.99
+
+
 def test_api_endpoint_response_has_no_cache_control_header_added():
     response = client.post(
         "/api/suggest-low-impact",

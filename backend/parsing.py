@@ -9,7 +9,7 @@ from __future__ import annotations
 import time
 import uuid
 from dataclasses import dataclass
-from io import BytesIO
+from io import BytesIO, StringIO
 from pathlib import Path
 
 import pandas as pd
@@ -94,11 +94,67 @@ def list_sheets(filename: str, content: bytes) -> list[str]:
     return list(workbook.sheet_names)
 
 
+def _sniff_sample(content: bytes) -> str:
+    """Decode at most config.CSV_SNIFF_BYTES of content, dropping a
+    possibly-truncated trailing line so the sample only contains whole rows.
+    """
+    raw = content[: config.CSV_SNIFF_BYTES]
+    text = raw.decode("utf-8", errors="ignore")
+    if len(content) > len(raw) and "\n" in text:
+        text = text.rsplit("\n", 1)[0]
+    return text
+
+
+def _detect_separator(sample: str) -> str:
+    """Pick the candidate separator occurring most often in the first
+    non-empty line of the sample; fall back to the default on a tie or when
+    none of the candidates occurs.
+    """
+    first_line = next((line for line in sample.splitlines() if line.strip()), "")
+    counts = {sep: first_line.count(sep) for sep in config.CSV_CANDIDATE_SEPARATORS}
+    best_count = max(counts.values())
+    if best_count == 0:
+        return config.CSV_DEFAULT_SEPARATOR
+    winners = [sep for sep, count in counts.items() if count == best_count]
+    if len(winners) > 1:
+        return config.CSV_DEFAULT_SEPARATOR
+    return winners[0]
+
+
+def _detect_decimal(sample: str, separator: str) -> str:
+    """Choose the decimal mark for a `;`-separated sample by parsing the
+    sample both ways and keeping whichever yields more numeric-dtype
+    columns; ties (and any other separator) resolve to ".".
+    """
+    if separator != ";":
+        return "."
+    counts = {}
+    for candidate in (",", "."):
+        try:
+            parsed = pd.read_csv(StringIO(sample), sep=separator, decimal=candidate)
+        except (pd.errors.ParserError, ValueError):
+            counts[candidate] = -1
+            continue
+        counts[candidate] = parsed.select_dtypes(include="number").shape[1]
+    return "," if counts[","] > counts["."] else "."
+
+
+def _detect_csv_dialect(content: bytes) -> tuple[str, str]:
+    """Detect (separator, decimal) from the file content, per config."""
+    sample = _sniff_sample(content)
+    separator = _detect_separator(sample)
+    decimal = _detect_decimal(sample, separator)
+    return separator, decimal
+
+
 def _read_raw(filename: str, content: bytes, sheet: str) -> pd.DataFrame:
     """Read a sheet/csv with no header, purely to count its raw rows."""
     extension = Path(filename).suffix.lower()
     if extension == ".csv":
-        return pd.read_csv(BytesIO(content), header=None)
+        separator, decimal = _detect_csv_dialect(content)
+        return pd.read_csv(
+            BytesIO(content), header=None, sep=separator, decimal=decimal
+        )
     return pd.read_excel(BytesIO(content), sheet_name=sheet, header=None)
 
 
@@ -134,7 +190,10 @@ def read_sheet(
 
     pandas_header = header_row - 1
     if extension == ".csv":
-        return pd.read_csv(BytesIO(content), header=pandas_header)
+        separator, decimal = _detect_csv_dialect(content)
+        return pd.read_csv(
+            BytesIO(content), header=pandas_header, sep=separator, decimal=decimal
+        )
     return pd.read_excel(BytesIO(content), sheet_name=sheet, header=pandas_header)
 
 

@@ -117,3 +117,51 @@ def test_select_columns_start_after_end_raises():
     df = parsing.read_sheet("sample.xlsx", content, "Data1", header_row=1)
     with pytest.raises(parsing.ValidationError, match="Startkolonne"):
         parsing.select_columns(df, start_col=3, end_col=2)
+
+
+def test_read_sheet_semicolon_separator_with_comma_decimal():
+    content = b"Tid;Y;X1;X2\n1;1,5;2,5;3,5\n2;2,5;3,5;4,5\n"
+    df = parsing.read_sheet("semi.csv", content, parsing.CSV_SHEET_NAME, header_row=1)
+    assert list(df.columns) == ["Tid", "Y", "X1", "X2"]
+    assert df["Y"].dtype.kind in "if"
+    assert df["Y"].iloc[0] == pytest.approx(1.5)
+
+
+def test_read_sheet_semicolon_separator_with_point_decimal():
+    content = b"Tid;Y;X1;X2\n1;1.5;2.5;3.5\n2;2.5;3.5;4.5\n"
+    df = parsing.read_sheet("semi.csv", content, parsing.CSV_SHEET_NAME, header_row=1)
+    assert list(df.columns) == ["Tid", "Y", "X1", "X2"]
+    assert df["Y"].dtype.kind in "if"
+    assert df["Y"].iloc[0] == pytest.approx(1.5)
+
+
+def test_read_sheet_comma_separator_still_works():
+    content = b"Tid,Y,X1,X2\n1,1.5,2.5,3.5\n2,2.5,3.5,4.5\n"
+    df = parsing.read_sheet("comma.csv", content, parsing.CSV_SHEET_NAME, header_row=1)
+    assert list(df.columns) == ["Tid", "Y", "X1", "X2"]
+    assert df["Y"].dtype.kind in "if"
+    assert df["Y"].iloc[0] == pytest.approx(1.5)
+
+
+def test_read_sheet_tab_separator_detected():
+    content = b"Tid\tY\tX1\tX2\n1\t1.5\t2.5\t3.5\n2\t2.5\t3.5\t4.5\n"
+    df = parsing.read_sheet("tab.csv", content, parsing.CSV_SHEET_NAME, header_row=1)
+    assert list(df.columns) == ["Tid", "Y", "X1", "X2"]
+
+
+def test_read_sheet_single_column_with_no_separator_character():
+    content = b"OnlyCol\nfoo\nbar\n"
+    df = parsing.read_sheet("single.csv", content, parsing.CSV_SHEET_NAME, header_row=1)
+    assert list(df.columns) == ["OnlyCol"]
+    assert len(df) == 2
+
+
+def test_read_sheet_header_row_two_on_semicolon_file():
+    # A title row precedes the header (a plausible header_row > 1 case);
+    # it is itself semicolon-padded, so separator detection (which reads
+    # the raw first non-empty line, not the header line) still picks ";".
+    content = b"Overskrift;;;\nTid;Y;X1;X2\n1;1.5;2.5;3.5\n2;2.5;3.5;4.5\n"
+    df = parsing.read_sheet("semi.csv", content, parsing.CSV_SHEET_NAME, header_row=2)
+    assert list(df.columns) == ["Tid", "Y", "X1", "X2"]
+    assert len(df) == 2
+    assert df["Y"].iloc[0] == pytest.approx(1.5)
