@@ -306,4 +306,22 @@ async def generate_report(request: ReportRequest):
     )
 
 
-app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
+class RevalidatingStaticFiles(StaticFiles):
+    """StaticFiles that forces revalidation instead of heuristic caching.
+
+    Without an explicit Cache-Control, browsers may reuse a stored copy of
+    a frontend file (app.js, vendor bundles) without checking the server
+    first, so a deployed change can appear "missing". "no-cache" (not
+    "no-store") keeps the ETag/304 path intact, so the 4.5 MB vendored
+    frontend/vendor/plotly.min.js is still not re-downloaded on every load.
+    """
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["cache-control"] = "no-cache"
+        return response
+
+
+app.mount(
+    "/", RevalidatingStaticFiles(directory=FRONTEND_DIR, html=True), name="frontend"
+)

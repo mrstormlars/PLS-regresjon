@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections import Counter
 from dataclasses import dataclass
-from io import BytesIO
+from io import BytesIO, StringIO
 from pathlib import Path
 
 import pandas as pd
@@ -94,12 +95,185 @@ def list_sheets(filename: str, content: bytes) -> list[str]:
     return list(workbook.sheet_names)
 
 
-def _read_raw(filename: str, content: bytes, sheet: str) -> pd.DataFrame:
-    """Read a sheet/csv with no header, purely to count its raw rows."""
+def _sniff_sample(content: bytes) -> str:
+    """Decode at most config.CSV_SNIFF_BYTES of content, dropping a
+    possibly-truncated trailing line so the sample only contains whole rows.
+    """
+    raw = content[: config.CSV_SNIFF_BYTES]
+    text = raw.decode("utf-8", errors="ignore")
+    if len(content) > len(raw) and "\n" in text:
+        text = text.rsplit("\n", 1)[0]
+    return text
+
+
+def _separator_consistency_score(sep: str, lines: list[str]) -> tuple[float, int]:
+    """Score how consistently `sep` occurs across non-empty lines.
+
+    A real delimiter appears the same number of times on every line (a
+    decimal mark does not: it's absent from the header line and varies with
+    how many values are non-integer). Returns (score, m) where m is the
+    most common non-zero per-line count and score is the fraction of lines
+    whose count equals m; (0, -1) if `sep` occurs on no line at all.
+    """
+    counts = [line.count(sep) for line in lines]
+    nonzero_counts = [c for c in counts if c > 0]
+    if not nonzero_counts:
+        return 0.0, -1
+    m = Counter(nonzero_counts).most_common(1)[0][0]
+    score = counts.count(m) / len(lines)
+    return score, m
+
+
+def _numeric_column_count(sample: str, separator: str) -> int:
+    """Parse `sample` with `separator` (and its decimal-mark detection) and
+    count the resulting numeric-dtype columns; -1 if pandas cannot tokenize
+    the sample at all with this separator.
+    """
+    decimal = _detect_decimal(sample, separator)
+    try:
+        parsed = pd.read_csv(StringIO(sample), sep=separator, decimal=decimal)
+    except (pd.errors.ParserError, ValueError):
+        return -1
+    return parsed.select_dtypes(include="number").shape[1]
+
+
+def _detect_separator(sample: str) -> str:
+    """Pick the candidate separator whose occurrence count is most
+    consistent line-to-line (see _separator_consistency_score) - this is
+    what distinguishes a real field separator from a decimal mark, which a
+    raw occurrence count cannot.
+
+    Candidates tied on that (score, m) pair are broken by which one, when
+    used to actually parse the sample, yields the most numeric-dtype
+    columns (e.g. a header containing an incidental occurrence of a
+    non-separator candidate character). Any tie still remaining prefers
+    config.CSV_DEFAULT_SEPARATOR, then earlier position in
+    config.CSV_CANDIDATE_SEPARATORS.
+
+    Known limitation: this rule cannot disambiguate a file where a rival
+    separator appears in the values or header at the same per-line
+    frequency AND both candidates yield the same numeric-column count.
+    Concrete case: "By;Verdi,type" / "Oslo;12,34" / "Bergen;56,78". `;`
+    and `,` tie on consistency score, on modal count, and even on numeric-
+    column count - the last tie happens because splitting a comma-decimal
+    value on its own decimal comma yields two integer-looking fragments
+    ("12,34" -> "12" and "34"). The fallback then picks
+    config.CSV_DEFAULT_SEPARATOR, which is wrong here: the file is
+    semicolon-separated. This is not fixable by another tie-break - the
+    same bytes are a valid comma-separated file and a valid
+    semicolon-separated file, and only knowing what the column names mean
+    settles it. The planned resolution is a user-facing override of
+    separator and decimal mark, not a further heuristic.
+    """
+    lines = [line for line in sample.splitlines() if line.strip()]
+    if not lines:
+        return config.CSV_DEFAULT_SEPARATOR
+
+    scored = [
+        (sep, *_separator_consistency_score(sep, lines))
+        for sep in config.CSV_CANDIDATE_SEPARATORS
+    ]
+    best_score = max(score for _, score, _ in scored)
+    tied_on_score = [(sep, m) for sep, score, m in scored if score == best_score]
+    best_m = max(m for _, m in tied_on_score)
+    candidates = [sep for sep, m in tied_on_score if m == best_m]
+
+    if len(candidates) > 1:
+        numeric_counts = {sep: _numeric_column_count(sample, sep) for sep in candidates}
+        best_numeric = max(numeric_counts.values())
+        candidates = [sep for sep in candidates if numeric_counts[sep] == best_numeric]
+
+    if config.CSV_DEFAULT_SEPARATOR in candidates:
+        return config.CSV_DEFAULT_SEPARATOR
+    return candidates[0]
+
+
+def _detect_decimal(sample: str, separator: str) -> str:
+    """Choose the decimal mark for a `;`-separated sample by parsing the
+    sample both ways and keeping whichever yields more numeric-dtype
+    columns; ties (and any other separator) resolve to ".".
+    """
+    if separator != ";":
+        return "."
+    counts = {}
+    for candidate in (",", "."):
+        try:
+            parsed = pd.read_csv(StringIO(sample), sep=separator, decimal=candidate)
+        except (pd.errors.ParserError, ValueError):
+            counts[candidate] = -1
+            continue
+        counts[candidate] = parsed.select_dtypes(include="number").shape[1]
+    return "," if counts[","] > counts["."] else "."
+
+
+def _detect_csv_dialect(content: bytes) -> tuple[str, str]:
+    """Detect (separator, decimal) from the file content, per config."""
+    sample = _sniff_sample(content)
+    separator = _detect_separator(sample)
+    decimal = _detect_decimal(sample, separator)
+    return separator, decimal
+
+
+def _count_csv_rows(content: bytes, separator: str, decimal: str) -> int:
+    """Count the physical rows of CSV content, for header_row bounds-checking.
+
+    Tries pd.read_csv(header=None) first, so a well-formed file's count
+    matches the real parse's row semantics exactly (including a blank line
+    counting as a row, via skip_blank_lines=False). A title/preamble row
+    above the real header commonly has fewer fields than the data rows
+    below it - a shape pd.read_csv(header=None) cannot tokenize without
+    raising, even though the real, header-aware parse in read_sheet handles
+    it fine (pandas doesn't require rows before an explicit header index to
+    match its field count). Since this helper only needs a count, not the
+    parsed columns, it falls back to a plain line count in that case rather
+    than treating a preamble row as a fatal error.
+    """
+    try:
+        return len(
+            pd.read_csv(
+                BytesIO(content),
+                header=None,
+                sep=separator,
+                decimal=decimal,
+                skip_blank_lines=False,
+            )
+        )
+    except (pd.errors.ParserError, pd.errors.EmptyDataError):
+        return len(content.decode("utf-8", errors="ignore").splitlines())
+
+
+def _parse_csv(
+    content: bytes, header: int, separator: str, decimal: str
+) -> pd.DataFrame:
+    """Parse CSV content with the detected separator/decimal.
+
+    Raises ValidationError (Norwegian message) if pandas cannot tokenize
+    the content even with the detected separator/decimal (e.g. rows with
+    inconsistent field counts) - never lets pandas.errors.ParserError
+    surface to the caller as an unhandled 500.
+    """
+    try:
+        return pd.read_csv(
+            BytesIO(content),
+            header=header,
+            sep=separator,
+            decimal=decimal,
+            skip_blank_lines=False,
+        )
+    except pd.errors.ParserError as err:
+        raise ValidationError(
+            "Kunne ikke lese filen som CSV. Sjekk at alle radene har samme "
+            "antall kolonner."
+        ) from err
+
+
+def _read_raw(filename: str, content: bytes, sheet: str) -> int:
+    """Count the raw rows of a sheet/csv, with no header."""
     extension = Path(filename).suffix.lower()
     if extension == ".csv":
-        return pd.read_csv(BytesIO(content), header=None)
-    return pd.read_excel(BytesIO(content), sheet_name=sheet, header=None)
+        separator, decimal = _detect_csv_dialect(content)
+        return _count_csv_rows(content, separator, decimal)
+    return len(pd.read_excel(BytesIO(content), sheet_name=sheet, header=None))
 
 
 def read_sheet(
@@ -125,7 +299,7 @@ def read_sheet(
     if header_row < 1:
         raise ValidationError("Header-rad må være et Excel-radnummer (1 eller høyere).")
 
-    total_rows = len(_read_raw(filename, content, sheet))
+    total_rows = _read_raw(filename, content, sheet)
     if header_row > total_rows:
         raise ValidationError(
             f"Header-rad {header_row} finnes ikke i arket (arket har kun "
@@ -134,7 +308,8 @@ def read_sheet(
 
     pandas_header = header_row - 1
     if extension == ".csv":
-        return pd.read_csv(BytesIO(content), header=pandas_header)
+        separator, decimal = _detect_csv_dialect(content)
+        return _parse_csv(content, pandas_header, separator, decimal)
     return pd.read_excel(BytesIO(content), sheet_name=sheet, header=pandas_header)
 
 

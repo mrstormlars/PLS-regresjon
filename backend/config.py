@@ -57,3 +57,13 @@ REPORT_FILENAME_PREFIX = "pls-rapport"
 
 # Model-variable name for a log10-derived term, given its base column name.
 LOG_COLUMN_NAME_FORMAT = "log10({col})"
+
+# CSV separator/decimal detection: candidates are scored by how consistently
+# each occurs across the sample's lines, tie-broken by higher modal count,
+# then by which yields more numeric-dtype columns when parsed, then by
+# CSV_DEFAULT_SEPARATOR, then by position in this tuple. See
+# parsing._detect_separator for the algorithm. Only bytes up to
+# CSV_SNIFF_BYTES are inspected.
+CSV_CANDIDATE_SEPARATORS = (";", ",", "\t")
+CSV_DEFAULT_SEPARATOR = ","
+CSV_SNIFF_BYTES = 8192
