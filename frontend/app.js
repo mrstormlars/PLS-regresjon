@@ -190,6 +190,17 @@ function setColumnRowHidden(className, column, hidden) {
   if (row) row.classList.toggle("hidden-row", hidden);
 }
 
+// A column's limit row is relevant whenever EITHER its X-checkbox or its
+// log10-checkbox is checked (a log-only column still needs a limit filter
+// on its base column - see backend/analysis.py's build_model_variables).
+function updateLimitRowVisibility(col) {
+  const xColRow = findColumnRow("x-col-row", col);
+  if (!xColRow) return;
+  const xChecked = xColRow.querySelector(".x-col-checkbox").checked;
+  const logChecked = xColRow.querySelector(".log-x-checkbox").checked;
+  setColumnRowHidden("limit-row", col, !(xChecked || logChecked));
+}
+
 function populateColumnControls(columns) {
   const ySelect = el("y-col-select");
   ySelect.innerHTML = "";
@@ -214,7 +225,7 @@ function populateColumnControls(columns) {
     checkbox.checked = true;
     checkbox.className = "x-col-checkbox";
     checkbox.addEventListener("change", () => {
-      setColumnRowHidden("limit-row", col, !checkbox.checked);
+      updateLimitRowVisibility(col);
     });
     checkboxLabel.appendChild(checkbox);
     checkboxLabel.appendChild(document.createTextNode(col));
@@ -224,6 +235,9 @@ function populateColumnControls(columns) {
     logCheckbox.type = "checkbox";
     logCheckbox.className = "log-x-checkbox";
     logCheckbox.dataset.column = col;
+    logCheckbox.addEventListener("change", () => {
+      updateLimitRowVisibility(col);
+    });
     logLabel.appendChild(logCheckbox);
     logLabel.appendChild(document.createTextNode("log10"));
 
@@ -754,15 +768,25 @@ function renderOptimizeSummary(data) {
 el("apply-optimized-button").addEventListener("click", () => {
   if (!state.lastOptimizeResult) return;
   const finalExcluded = state.lastOptimizeResult.final_excluded_cols;
+  const finalLogXCols = state.lastOptimizeResult.final_log_x_cols;
 
   for (const checkbox of document.querySelectorAll(".x-col-checkbox")) {
     if (finalExcluded.includes(checkbox.value)) {
       checkbox.checked = false;
-      setColumnRowHidden("limit-row", checkbox.value, true);
     }
   }
+  for (const checkbox of document.querySelectorAll(".log-x-checkbox")) {
+    if (!finalLogXCols.includes(checkbox.dataset.column)) {
+      checkbox.checked = false;
+    }
+  }
+  for (const col of state.columns) updateLimitRowVisibility(col);
 
-  state.lastAnalyzePayload = { ...state.lastAnalyzePayload, excluded_cols: finalExcluded };
+  state.lastAnalyzePayload = {
+    ...state.lastAnalyzePayload,
+    excluded_cols: finalExcluded,
+    log_x_cols: finalLogXCols,
+  };
   renderResults(state.lastOptimizeResult.results);
   setStatus("optimize-status", "Optimalisert utvalg er brukt på resultatene.");
 });
@@ -1199,13 +1223,23 @@ function renderSimulationTable(result) {
     '<td id="sim-y-delta-pct">0.00 %</td>';
   body.appendChild(yRow);
 
-  for (const [col, baseline] of Object.entries(result.x_means_raw || {})) {
+  // One row per base variable: x_var_bases (model_var -> base_var) may map
+  // two model variables (e.g. "X1" and "log10(X1)") to the same base, so
+  // dedupe by base_var while preserving order; the baseline is the same for
+  // both terms (see backend/analysis.py's run_analysis), so any one
+  // model_var's x_means_raw entry works.
+  const seenBases = new Set();
+  for (const [modelVar, baseVar] of Object.entries(result.x_var_bases || {})) {
+    if (seenBases.has(baseVar)) continue;
+    seenBases.add(baseVar);
+    const baseline = result.x_means_raw[modelVar];
+
     const row = document.createElement("tr");
     row.className = "sim-x-row";
-    row.dataset.column = col;
+    row.dataset.column = baseVar;
 
     const nameTd = document.createElement("td");
-    nameTd.textContent = col;
+    nameTd.textContent = baseVar;
 
     const baseTd = document.createElement("td");
     baseTd.textContent = baseline.toFixed(4);
@@ -1215,14 +1249,14 @@ function renderSimulationTable(result) {
     changeInput.type = "number";
     changeInput.step = "any";
     changeInput.className = "sim-change-input";
-    changeInput.dataset.column = col;
+    changeInput.dataset.column = baseVar;
     changeInput.addEventListener("input", scheduleSimulate);
     changeTd.appendChild(changeInput);
 
     const modeTd = document.createElement("td");
     const modeSelect = document.createElement("select");
     modeSelect.className = "sim-mode-select";
-    modeSelect.dataset.column = col;
+    modeSelect.dataset.column = baseVar;
     const absoluteOption = document.createElement("option");
     absoluteOption.value = "absolute";
     absoluteOption.textContent = "absolutt";
@@ -1277,7 +1311,7 @@ async function runSimulate() {
       coefficients_raw: result.coefficients_raw,
       x_means_raw: result.x_means_raw,
       log_y: payload.log_y || false,
-      log_x_cols: payload.log_x_cols || [],
+      x_var_bases: result.x_var_bases || {},
       changes,
     });
     el("sim-y-value").textContent = data.y_new.toFixed(4);
