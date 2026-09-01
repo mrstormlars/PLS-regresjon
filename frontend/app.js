@@ -541,17 +541,59 @@ function getAllXCols() {
   return Object.keys(state.lastAnalyzeResult.coefficients);
 }
 
+// Splits a set of selected model-variable names (e.g. from the coefficient
+// chart's column-selection domain) into base columns whose LINEAR term
+// should be excluded and base columns whose LOG10 term should be removed,
+// using x_var_bases (model_var -> base_var; model_var === base_var marks a
+// linear term, anything else a log10-derived term - see
+// backend/analysis.py's build_model_variables). A selected name with no
+// x_var_bases entry falls back to being treated as a base name for
+// excluded_cols (e.g. an older result shape without x_var_bases).
+function splitModelVarSelection(selectedNames, xVarBases) {
+  const excludeBases = new Set();
+  const removeLogBases = new Set();
+  for (const name of selectedNames) {
+    const base = xVarBases ? xVarBases[name] : undefined;
+    if (base === undefined) {
+      excludeBases.add(name);
+    } else if (name === base) {
+      excludeBases.add(base);
+    } else {
+      removeLogBases.add(base);
+    }
+  }
+  return { excludeBases, removeLogBases };
+}
+
+// Applies a final excluded_cols/log_x_cols pair to the X-checkbox and
+// log10-checkbox controls (and their limit-row visibility), so the UI
+// never disagrees with a request payload built from the same pair. Shared
+// by the optimizer's "apply" button and re-run-with-selection below.
+function syncColumnCheckboxes(excludedCols, logXCols) {
+  for (const checkbox of document.querySelectorAll(".x-col-checkbox")) {
+    if (excludedCols.includes(checkbox.value)) checkbox.checked = false;
+  }
+  for (const checkbox of document.querySelectorAll(".log-x-checkbox")) {
+    if (!logXCols.includes(checkbox.dataset.column)) checkbox.checked = false;
+  }
+  for (const col of state.columns) updateLimitRowVisibility(col);
+}
+
 async function rerunAnalysis(mode) {
   if (!state.lastAnalyzePayload) return;
   const payload = { ...state.lastAnalyzePayload };
   const excludedRows = new Set(payload.excluded_rows || []);
   const excludedCols = new Set(payload.excluded_cols || []);
+  const logXCols = new Set(payload.log_x_cols || []);
   const selectedRows = [...state.selectedRows];
   const selectedCols = [...state.selectedCols];
+  const xVarBases = state.lastAnalyzeResult ? state.lastAnalyzeResult.x_var_bases : null;
 
   if (mode === "without-selected") {
     for (const row of selectedRows) excludedRows.add(row);
-    for (const col of selectedCols) excludedCols.add(col);
+    const { excludeBases, removeLogBases } = splitModelVarSelection(selectedCols, xVarBases);
+    for (const base of excludeBases) excludedCols.add(base);
+    for (const base of removeLogBases) logXCols.delete(base);
   } else if (mode === "only-selected") {
     if (selectedRows.length) {
       const keep = new Set(selectedRows);
@@ -560,27 +602,24 @@ async function rerunAnalysis(mode) {
       }
     }
     if (selectedCols.length) {
-      const keep = new Set(selectedCols);
-      for (const col of getAllXCols()) {
-        if (!keep.has(col)) excludedCols.add(col);
-      }
+      const keepNames = new Set(selectedCols);
+      const notSelected = getAllXCols().filter((name) => !keepNames.has(name));
+      const { excludeBases, removeLogBases } = splitModelVarSelection(notSelected, xVarBases);
+      for (const base of excludeBases) excludedCols.add(base);
+      for (const base of removeLogBases) logXCols.delete(base);
     }
   }
 
   payload.excluded_rows = [...excludedRows];
   payload.excluded_cols = [...excludedCols];
+  payload.log_x_cols = [...logXCols];
 
   setStatus("analyze-status", "Kjører analyse på nytt...");
   try {
     const result = await postJson("/api/analyze", payload);
     state.lastAnalyzePayload = payload;
     el("excluded-rows-input").value = payload.excluded_rows.join(", ");
-    for (const checkbox of document.querySelectorAll(".x-col-checkbox")) {
-      if (payload.excluded_cols.includes(checkbox.value)) {
-        checkbox.checked = false;
-        setColumnRowHidden("limit-row", checkbox.value, true);
-      }
-    }
+    syncColumnCheckboxes(payload.excluded_cols, payload.log_x_cols);
     renderResults(result);
     setStatus("analyze-status", "Analyse fullført.");
   } catch (err) {
@@ -770,17 +809,7 @@ el("apply-optimized-button").addEventListener("click", () => {
   const finalExcluded = state.lastOptimizeResult.final_excluded_cols;
   const finalLogXCols = state.lastOptimizeResult.final_log_x_cols;
 
-  for (const checkbox of document.querySelectorAll(".x-col-checkbox")) {
-    if (finalExcluded.includes(checkbox.value)) {
-      checkbox.checked = false;
-    }
-  }
-  for (const checkbox of document.querySelectorAll(".log-x-checkbox")) {
-    if (!finalLogXCols.includes(checkbox.dataset.column)) {
-      checkbox.checked = false;
-    }
-  }
-  for (const col of state.columns) updateLimitRowVisibility(col);
+  syncColumnCheckboxes(finalExcluded, finalLogXCols);
 
   state.lastAnalyzePayload = {
     ...state.lastAnalyzePayload,
