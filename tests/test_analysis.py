@@ -484,6 +484,29 @@ def test_run_analysis_x_var_bases_maps_model_names_to_base():
     assert result["x_var_bases"]["X2"] == "X2"
 
 
+def test_run_analysis_x_means_raw_for_log_term_uses_raw_base_mean():
+    # x_means_raw's value for a log10-derived term must be the mean of the
+    # RAW (pre-log10) base column, not mean(log10(base)) - these differ
+    # whenever the base column isn't constant (Jensen's inequality), and
+    # only the raw-mean convention matches _predict_raw's contract (it
+    # applies log10 internally to a raw value).
+    df = make_derived_variable_dataset()
+    result = analysis.run_analysis(
+        df,
+        y_col="Y",
+        excluded_cols=["X1"],
+        log_x_cols=["X1"],
+        max_components=1,
+        cv_folds=5,
+    )
+    raw_mean = df["X1"].mean()
+    log_mean = np.log10(df["X1"]).mean()
+    assert raw_mean != pytest.approx(
+        log_mean
+    )  # sanity: the two are actually distinguishable
+    assert result["x_means_raw"]["log10(X1)"] == pytest.approx(raw_mean, abs=1e-8)
+
+
 def test_run_analysis_raw_coefficient_equivalence_with_both_terms():
     df = make_derived_variable_dataset()
     result = analysis.run_analysis(
@@ -630,6 +653,26 @@ def test_simulate_change_log_x_contribution_uses_log10_difference():
     )
     expected = 5.0 * (np.log10(1000.0) - np.log10(100.0))
     assert result["contributions"]["X1"] == pytest.approx(expected, abs=1e-8)
+
+
+def test_simulate_change_percent_mode_scales_raw_base_before_log10():
+    # A percent change on a log-derived variable must scale the RAW base
+    # value before taking log10, not scale the already-log10'd baseline
+    # itself (log10 isn't linear, so these differ whenever x_base != 1).
+    b_log = 5.0
+    x_base = 100.0
+    percent = 20.0
+    result = analysis.simulate_change(
+        intercept=1.0,
+        coefficients_raw={"log10(X1)": b_log},
+        x_means_raw={"log10(X1)": x_base},
+        log_y=False,
+        x_var_bases={"log10(X1)": "X1"},
+        changes={"X1": {"mode": "percent", "value": percent}},
+    )
+    x_new = x_base * (1 + percent / 100.0)
+    expected_delta = b_log * (np.log10(x_new) - np.log10(x_base))
+    assert result["delta"] == pytest.approx(expected_delta, abs=1e-8)
 
 
 def test_simulate_change_both_terms_move_y_together():
