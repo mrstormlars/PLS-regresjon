@@ -965,6 +965,54 @@ def test_analyze_semicolon_csv_with_comma_decimals_produces_successful_fit():
     assert response.json()["r2_cal"] > 0.99
 
 
+def test_preview_malformed_csv_returns_400_with_norwegian_message():
+    # Header declares 3 fields, the second data row has 4 - a genuine
+    # tokenizing failure that must surface as a 400 with a Norwegian
+    # message, never an unhandled 500.
+    content = b"A;B;C\n1;2;3\n4;5;6;7\n"
+    file_id = _upload("bad.csv", content, content_type="text/csv").json()["file_id"]
+    response = client.post(
+        "/api/preview", json={"file_id": file_id, "sheet": "CSV", "header_row": 1}
+    )
+    assert response.status_code == 400
+    assert "CSV" in response.json()["detail"]
+
+
+def _trailing_blank_line_csv_content():
+    n = config.MIN_VALID_ROWS + 2
+    lines = ["X1,Y"]
+    for i in range(1, n + 1):
+        lines.append(f"{i},{i * 2.0}")
+    return ("\n".join(lines) + "\n\n").encode()
+
+
+def test_analyze_trailing_blank_line_is_dropped_with_correct_row_numbers():
+    n = config.MIN_VALID_ROWS + 2
+    content = _trailing_blank_line_csv_content()
+    file_id = _upload("trailing_blank.csv", content, content_type="text/csv").json()[
+        "file_id"
+    ]
+    response = client.post(
+        "/api/analyze",
+        json={
+            "file_id": file_id,
+            "sheet": "CSV",
+            "header_row": 1,
+            "y_col": "Y",
+            "max_components": 1,
+            "cv_folds": 3,
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    # Data rows are Excel rows 2..n+1; the trailing blank line is Excel row
+    # n+2 and must be dropped by the complete-case filter, not shift these.
+    expected_row_indices = list(range(2, n + 2))
+    row_indices = sorted(d["row_index"] for d in body["diagnostics"])
+    assert row_indices == expected_row_indices
+    assert body["n_rows_dropped_missing"] == 1
+
+
 def test_api_endpoint_response_has_no_cache_control_header_added():
     response = client.post(
         "/api/suggest-low-impact",

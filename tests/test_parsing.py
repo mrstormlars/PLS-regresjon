@@ -158,10 +158,97 @@ def test_read_sheet_single_column_with_no_separator_character():
 
 def test_read_sheet_header_row_two_on_semicolon_file():
     # A title row precedes the header (a plausible header_row > 1 case);
-    # it is itself semicolon-padded, so separator detection (which reads
-    # the raw first non-empty line, not the header line) still picks ";".
+    # it is itself semicolon-padded, so separator detection - which now
+    # tallies occurrences across all non-empty lines of the sample, not
+    # just the first one - still picks ";".
     content = b"Overskrift;;;\nTid;Y;X1;X2\n1;1.5;2.5;3.5\n2;2.5;3.5;4.5\n"
     df = parsing.read_sheet("semi.csv", content, parsing.CSV_SHEET_NAME, header_row=2)
     assert list(df.columns) == ["Tid", "Y", "X1", "X2"]
     assert len(df) == 2
     assert df["Y"].iloc[0] == pytest.approx(1.5)
+
+
+def test_read_sheet_separator_free_title_line_above_semicolon_header():
+    # This is the primary real-world case (Excel sheets with a title row
+    # above the header): a title line with none of the candidate
+    # separators must not outvote the semicolons in the header/data lines
+    # below it.
+    content = b"Rapport 2026\nTid;Y;X1;X2\n1;1.5;2.5;3.5\n2;2.5;3.5;4.5\n"
+    df = parsing.read_sheet("semi.csv", content, parsing.CSV_SHEET_NAME, header_row=2)
+    assert list(df.columns) == ["Tid", "Y", "X1", "X2"]
+
+
+def test_read_sheet_separator_free_title_line_above_tab_header():
+    content = b"Rapport 2026\nTid\tY\tX1\tX2\n1\t1.5\t2.5\t3.5\n2\t2.5\t3.5\t4.5\n"
+    df = parsing.read_sheet("tab.csv", content, parsing.CSV_SHEET_NAME, header_row=2)
+    assert list(df.columns) == ["Tid", "Y", "X1", "X2"]
+
+
+def test_read_sheet_separator_free_title_line_above_comma_header():
+    # Regression guard: a separator-free title line must not make the
+    # total-occurrence rule pick something other than "," for an otherwise
+    # ordinary comma file.
+    content = b"Rapport 2026\nTid,Y,X1,X2\n1,1.5,2.5,3.5\n2,2.5,3.5,4.5\n"
+    df = parsing.read_sheet("comma.csv", content, parsing.CSV_SHEET_NAME, header_row=2)
+    assert list(df.columns) == ["Tid", "Y", "X1", "X2"]
+
+
+def test_read_sheet_malformed_csv_raises_validation_error_not_parser_error():
+    # Header declares 3 fields, a data row has 4 - a genuine tokenizing
+    # failure, unrelated to separator/decimal ambiguity, that pandas would
+    # otherwise raise as an unhandled pandas.errors.ParserError.
+    content = b"A;B;C\n1;2;3\n4;5;6;7\n"
+    with pytest.raises(parsing.ValidationError, match="CSV"):
+        parsing.read_sheet("bad.csv", content, parsing.CSV_SHEET_NAME, header_row=1)
+
+
+def test_read_sheet_blank_line_above_comma_header_keeps_row_numbering():
+    content = b"\nTid,Y,X1,X2\n1,1.5,2.5,3.5\n2,2.5,3.5,4.5\n"
+    df = parsing.read_sheet("comma.csv", content, parsing.CSV_SHEET_NAME, header_row=2)
+    assert list(df.columns) == ["Tid", "Y", "X1", "X2"]
+    assert df["Tid"].tolist() == [1, 2]
+
+
+def test_read_sheet_blank_line_above_semicolon_header_keeps_row_numbering():
+    content = b"\nTid;Y;X1;X2\n1;1.5;2.5;3.5\n2;2.5;3.5;4.5\n"
+    df = parsing.read_sheet("semi.csv", content, parsing.CSV_SHEET_NAME, header_row=2)
+    assert list(df.columns) == ["Tid", "Y", "X1", "X2"]
+    assert df["Tid"].tolist() == [1, 2]
+
+
+def test_detect_separator_semicolon_wins_when_every_column_has_decimal_commas():
+    # Regression pin: a raw per-line occurrence TOTAL would wrongly pick ","
+    # here, because a semicolon row with C columns has C-1 separators but
+    # up to C decimal commas - if every column carries a decimal value, the
+    # comma total (C per row) can outnumber the semicolon total (C-1 per
+    # row) once summed over enough rows. Detection must instead use
+    # per-line CONSISTENCY: ";" occurs exactly twice on every line
+    # (including the header, which has no decimals), "," occurs 0 times on
+    # the header and 3 times on every data row - so ";" scores 1.0 and ","
+    # scores less than 1.0.
+    n = 20
+    lines = ["X1;X2;Y"]
+    for i in range(1, n + 1):
+        lines.append(f"{i},0;{i * 2},0;{i * 3},0")
+    content = ("\n".join(lines) + "\n").encode()
+
+    sample = parsing._sniff_sample(content)
+    assert parsing._detect_separator(sample) == ";"
+
+    df = parsing.read_sheet(
+        "counterexample.csv", content, parsing.CSV_SHEET_NAME, header_row=1
+    )
+    assert list(df.columns) == ["X1", "X2", "Y"]
+    assert df["Y"].dtype.kind in "if"
+    assert df["Y"].iloc[0] == pytest.approx(3.0)
+
+
+def test_read_raw_title_row_fallback_row_count_matches_physical_lines():
+    # Pins the _count_csv_rows fallback: when the header=None counting
+    # attempt can't tokenize a ragged preamble row, it must fall back to a
+    # plain physical-line count, not raise or silently miscount.
+    content = b"Rapport 2026\nTid;Y;X1;X2\n1;1.5;2.5;3.5\n2;2.5;3.5;4.5\n"
+    physical_line_count = len(content.decode("utf-8").splitlines())
+    assert parsing._read_raw("semi.csv", content, parsing.CSV_SHEET_NAME) == (
+        physical_line_count
+    )
