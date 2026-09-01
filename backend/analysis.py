@@ -173,18 +173,76 @@ def _compute_raw_coefficients(
     return coefficients_raw, float(intercept)
 
 
-def _model_input(var: str, x_raw: float, log_x_cols: set[str]) -> float:
-    """Convert a raw (original-units) x value to what the raw-scale model
-    coefficients expect: log10(x) for a log-selected variable, x unchanged
-    otherwise.
+def _base_name_from_model_var(model_var: str) -> str:
+    """Recover the base column name from a log10-derived model variable name
+    (inverts config.LOG_COLUMN_NAME_FORMAT, e.g. "log10(X1)" -> "X1").
 
-    Raises ValidationError (Norwegian message) if a log-selected variable's
-    value is not strictly positive.
+    Returns model_var unchanged if it doesn't match that format (a linear
+    term's model_var already IS the base name).
     """
-    if var in log_x_cols:
+    prefix, _, suffix = config.LOG_COLUMN_NAME_FORMAT.partition("{col}")
+    if (
+        model_var.startswith(prefix)
+        and model_var.endswith(suffix)
+        and len(model_var) >= len(prefix) + len(suffix)
+    ):
+        return model_var[len(prefix) : len(model_var) - len(suffix)]
+    return model_var
+
+
+def build_model_variables(
+    all_cols: list[str],
+    y_col: str,
+    excluded_cols: list[str],
+    log_x_cols: list[str],
+) -> list[tuple[str, str, bool]]:
+    """Compose the ordered list of model variables from base columns.
+
+    Each base column (iterated in original frame order, skipping y_col)
+    independently contributes a linear term if it is not excluded, and/or a
+    log10 term if it is log-selected - so a column can produce a linear
+    term, a log term, both, or neither. Returns (model_name, base_name,
+    is_log) tuples; a log term's model_name is
+    config.LOG_COLUMN_NAME_FORMAT.format(col=base_name).
+
+    Raises ValidationError (Norwegian message) if a derived log10 model name
+    collides with an existing column in all_cols.
+    """
+    excluded = set(excluded_cols)
+    log_selected = set(log_x_cols)
+    existing = set(all_cols)
+    model_vars: list[tuple[str, str, bool]] = []
+    for col in all_cols:
+        if col == y_col:
+            continue
+        if col not in excluded:
+            model_vars.append((col, col, False))
+        if col in log_selected:
+            log_name = config.LOG_COLUMN_NAME_FORMAT.format(col=col)
+            if log_name in existing:
+                raise ValidationError(
+                    f"Variabelnavnet '{log_name}' er i konflikt med en "
+                    f"eksisterende kolonne i datasettet."
+                )
+            model_vars.append((log_name, col, True))
+    return model_vars
+
+
+def _model_input(var: str, x_raw: float, log_model_cols: set[str]) -> float:
+    """Convert a raw (original-units) x value to what the raw-scale model
+    coefficients expect: log10(x) for a log-derived model variable, x
+    unchanged otherwise.
+
+    Raises ValidationError (Norwegian message), naming the BASE variable
+    (not the derived model-variable name - that is the name the user typed
+    into the simulation table), if a log-derived variable's value is not
+    strictly positive.
+    """
+    if var in log_model_cols:
         if x_raw <= 0:
+            base = _base_name_from_model_var(var)
             raise ValidationError(
-                f"Verdien for '{var}' må være positiv når logaritmisk skala er "
+                f"Verdien for '{base}' må være positiv når logaritmisk skala er "
                 f"valgt (fikk {x_raw:.4g})."
             )
         return float(np.log10(x_raw))
@@ -195,13 +253,13 @@ def _predict_raw(
     intercept: float,
     coefficients_raw: dict[str, float],
     x_values_raw: dict[str, float],
-    log_x_cols: set[str],
+    log_model_cols: set[str],
     log_y: bool,
 ) -> float:
     """Predict y in original units from x values in original (pre-log10) units."""
     y_model_scale = intercept
     for var, coef in coefficients_raw.items():
-        y_model_scale += coef * _model_input(var, x_values_raw[var], log_x_cols)
+        y_model_scale += coef * _model_input(var, x_values_raw[var], log_model_cols)
     return float(10**y_model_scale) if log_y else float(y_model_scale)
 
 
@@ -232,17 +290,21 @@ def run_analysis(
 ) -> dict:
     """Run the full PLS analysis pipeline on an already range-extracted DataFrame.
 
-    Pipeline: drop excluded rows/columns -> limit filter -> optional log10(Y)
-    and log10(selected X columns) -> coerce numeric, inf -> NaN, drop
-    incomplete rows -> standardize (mean/std) -> PLS sweep 1..max_components
-    with KFold CV -> pick optimal component count by minimum RMSEP -> fit
-    optimal model -> diagnostics.
+    Pipeline: drop excluded rows -> compose model variables (see
+    build_model_variables: each base column independently contributes a
+    linear term if included and/or a log10 term if log-selected) -> drop
+    base columns that contribute neither -> limit filter (on base columns)
+    -> optional log10(Y) and log10(selected model variables) -> coerce
+    numeric, inf -> NaN, drop incomplete rows -> standardize (mean/std) ->
+    PLS sweep 1..max_components with KFold CV -> pick optimal component
+    count by minimum RMSEP -> fit optimal model -> diagnostics.
 
     Non-positive values in a log10'd column become NaN and are dropped by
     the existing incomplete-row handling; if that pushes the valid row count
     below config.MIN_VALID_ROWS, the existing ValidationError below applies.
 
-    Raises ValidationError (Norwegian message) if Y is not numeric or if
+    Raises ValidationError (Norwegian message) if Y is not numeric, if a
+    derived log10 variable name collides with an existing column, or if
     fewer than config.MIN_VALID_ROWS complete rows remain.
     """
     excluded_cols = excluded_cols or []
@@ -254,7 +316,14 @@ def run_analysis(
         raise ValidationError(f"Kolonnen '{y_col}' finnes ikke i datasettet.")
 
     working = df.drop(index=[r for r in excluded_rows if r in df.index])
-    working = working.drop(columns=[c for c in excluded_cols if c in working.columns])
+
+    model_vars = build_model_variables(
+        list(working.columns), y_col, excluded_cols, log_x_cols
+    )
+    base_cols_needed = {base for _, base, _ in model_vars}
+    working = working[
+        [c for c in working.columns if c in base_cols_needed or c == y_col]
+    ]
 
     working = _apply_limits(working, limits)
 
@@ -266,14 +335,14 @@ def run_analysis(
         with np.errstate(divide="ignore", invalid="ignore"):
             y_numeric = np.log10(y_numeric)
 
-    x_cols = [c for c in working.columns if c != y_col]
-    X = working[x_cols].apply(pd.to_numeric, errors="coerce")
-    X_original = X.copy()  # pre-log10, for x_means_raw later
-    if log_x_cols:
-        with np.errstate(divide="ignore", invalid="ignore"):
-            for col in log_x_cols:
-                if col in X.columns:
-                    X[col] = np.log10(X[col])
+    base_frame = working[list(base_cols_needed)].apply(pd.to_numeric, errors="coerce")
+
+    x_cols = [name for name, _, _ in model_vars]  # model-variable order
+    log_model_cols = {name for name, _, is_log in model_vars if is_log}
+    X = pd.DataFrame(index=working.index)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        for name, base, is_log in model_vars:
+            X[name] = np.log10(base_frame[base]) if is_log else base_frame[base]
     X = X.replace([np.inf, -np.inf], np.nan)
     y = y_numeric.replace([np.inf, -np.inf], np.nan)
 
@@ -282,7 +351,8 @@ def run_analysis(
     # Missing/invalid-value visibility: counted among the rows that entered
     # this complete-case filter, i.e. before it drops anything. A cell is
     # "invalid" here if it's NaN after numeric coercion, inf, or NaN from a
-    # failed log10 (non-positive value in a log-selected column).
+    # failed log10 (non-positive value in a log-derived model variable). A
+    # failed log10 shows up under the derived model-variable name.
     n_rows_dropped_missing = int((~valid_mask).sum())
     missing_by_column: dict[str, int] = {}
     for col in x_cols:
@@ -295,7 +365,7 @@ def run_analysis(
 
     X = X.loc[valid_mask]
     y = y.loc[valid_mask]
-    X_original = X_original.loc[valid_mask]
+    base_frame = base_frame.loc[valid_mask]
 
     if len(y) < config.MIN_VALID_ROWS:
         raise ValidationError(
@@ -378,9 +448,13 @@ def run_analysis(
     coefficients = {col: float(coef[i]) for i, col in enumerate(x_cols)}
     coefficients_raw, intercept = _compute_raw_coefficients(X, y, coefficients)
 
-    x_means_raw = {col: float(X_original[col].mean()) for col in x_cols}
+    # Keyed by model-variable name; value = mean of the BASE column in
+    # original (pre-log10) units, so a linear and a log term sharing a base
+    # column carry the same baseline (see _predict_raw's raw-scale contract).
+    x_means_raw = {name: float(base_frame[base].mean()) for name, base, _ in model_vars}
+    x_var_bases = {name: base for name, base, _ in model_vars}
     y_baseline_raw = _predict_raw(
-        intercept, coefficients_raw, x_means_raw, set(log_x_cols), log_y
+        intercept, coefficients_raw, x_means_raw, log_model_cols, log_y
     )
 
     return {
@@ -401,6 +475,7 @@ def run_analysis(
         "missing_by_column": missing_by_column,
         "x_means_raw": x_means_raw,
         "y_baseline_raw": y_baseline_raw,
+        "x_var_bases": x_var_bases,
     }
 
 
@@ -427,23 +502,30 @@ def optimize_variables(
     cv_folds: int = config.CV_FOLDS_DEFAULT,
     tolerance: float = config.OPTIMIZE_TOLERANCE_DEFAULT,
 ) -> dict:
-    """Greedy backward elimination of X-variables.
+    """Greedy backward elimination of X model variables.
 
     Ported from the reference notebook's optimize_pls_variables
     (Inbox/PLS-regresjon.ipynb, cell 6), minus Fabric export, plotting, and
     verbose printing.
 
-    Each pass sorts the currently-included variables by ascending
-    |coefficient| (from the current best model) and tests excluding each one
-    in turn: if the resulting RMSEP (at that fit's optimal component count)
-    is no more than `tolerance` above the current best RMSEP, the exclusion
-    is kept permanently and the best model/RMSEP are updated. A pass that
-    eliminates nothing ends the optimization (stop_reason "converged"). The
-    last remaining predictor is never removed; running out of removable
-    variables ends the optimization too (stop_reason "too_few_variables").
+    Operates in model-variable space (see build_model_variables): a base
+    column's linear term and log10 term are independent removal candidates.
+    Removing a linear term adds its base to excluded_cols; removing a log
+    term drops its base from log_x_cols - the other term for that base (if
+    any) is unaffected.
 
-    The iteration count is bounded by the number of available X-variables
-    minus one (you cannot remove more than that), further capped by
+    Each pass sorts the currently-active model variables by ascending
+    |coefficient| (from the current best model) and tests removing each one
+    in turn: if the resulting RMSEP (at that fit's optimal component count)
+    is no more than `tolerance` above the current best RMSEP, the removal is
+    kept permanently and the best model/RMSEP are updated. A pass that
+    eliminates nothing ends the optimization (stop_reason "converged"). The
+    last remaining model variable is never removed; running out of
+    removable variables ends the optimization too (stop_reason
+    "too_few_variables").
+
+    The iteration count is bounded by the number of model variables minus
+    one (you cannot remove more than that), further capped by
     config.MAX_OPTIMIZE_ITERATIONS as a safety net against pathologically
     large variable counts. If that combined cap is reached before either
     natural stopping condition, the optimization still returns its
@@ -453,94 +535,116 @@ def optimize_variables(
     removals - the old fixed MAX_OPTIMIZE_ITERATIONS - indistinguishable in
     the response from genuine convergence).
 
-    Raises ValidationError (Norwegian message) if fewer than 2 X-variables
-    are available to start with.
+    Raises ValidationError (Norwegian message) if fewer than 2 model
+    variables are available to start with.
 
     Returns a dict with:
         - history: list of {iteration, removed_col, rmsep}, one entry per
-          variable actually removed (not per candidate tested).
-        - final_excluded_cols: the final list of excluded column names.
+          model variable actually removed (not per candidate tested);
+          removed_col is the model-variable name (e.g. "log10(X1)").
+        - final_excluded_cols: the final list of excluded BASE column names.
+        - final_log_x_cols: the final list of log-selected BASE column names.
         - results: the final run_analysis result (same shape as /api/analyze).
         - stop_reason: "converged" | "max_iterations" | "too_few_variables".
     """
     excluded_cols = list(excluded_cols or [])
+    log_x_cols = list(log_x_cols or [])
 
     if y_col not in df.columns:
         raise ValidationError(f"Kolonnen '{y_col}' finnes ikke i datasettet.")
 
-    all_vars = [c for c in df.columns if c != y_col]
-    available_vars = [c for c in all_vars if c not in excluded_cols]
-    if len(available_vars) < 2:
+    all_base_cols = [c for c in df.columns if c != y_col]
+    model_vars = build_model_variables(all_base_cols, y_col, excluded_cols, log_x_cols)
+    if len(model_vars) < 2:
         raise ValidationError(
             "Trenger minst 2 X-variabler for å optimalisere variabelutvalg."
         )
 
-    def _run(cols: list[str]) -> dict:
+    def _run(excluded: list[str], log_cols: list[str]) -> dict:
         return run_analysis(
             df,
             y_col=y_col,
-            excluded_cols=cols,
+            excluded_cols=excluded,
             excluded_rows=excluded_rows,
             limits=limits,
             log_y=log_y,
-            log_x_cols=log_x_cols,
+            log_x_cols=log_cols,
             max_components=max_components,
             cv_folds=cv_folds,
         )
 
     best_excluded = list(excluded_cols)
-    best_result = _run(best_excluded)
+    best_log = list(log_x_cols)
+    best_result = _run(best_excluded, best_log)
     best_rmsep = _rmsep_at_optimal(best_result)
 
     history: list[dict] = []
     iteration = 0
     # Natural bound: at most (available - 1) removals, since at least one
-    # predictor must remain. config.MAX_OPTIMIZE_ITERATIONS is a secondary
-    # safety net for pathologically large variable counts; only report
-    # "max_iterations" when *that* safety net (not the natural bound) is
-    # what actually cut the run short.
-    natural_bound = len(available_vars) - 1
+    # model variable must remain. config.MAX_OPTIMIZE_ITERATIONS is a
+    # secondary safety net for pathologically large variable counts; only
+    # report "max_iterations" when *that* safety net (not the natural
+    # bound) is what actually cut the run short.
+    natural_bound = len(model_vars) - 1
     effective_max_iterations = min(natural_bound, config.MAX_OPTIMIZE_ITERATIONS)
     capped_by_safety_net = effective_max_iterations < natural_bound
 
     stop_reason = "converged"
     while True:
-        included = [c for c in all_vars if c not in best_excluded]
-        if len(included) <= 1:
+        current_model_vars = build_model_variables(
+            all_base_cols, y_col, best_excluded, best_log
+        )
+        if len(current_model_vars) <= 1:
             stop_reason = "too_few_variables"
             break
 
         candidates = sorted(
-            included, key=lambda c: abs(best_result["coefficients"].get(c, 0.0))
+            current_model_vars,
+            key=lambda mv: abs(best_result["coefficients"].get(mv[0], 0.0)),
         )
 
         eliminated_in_pass = False
         hit_cap = False
-        for var in candidates:
-            if var in best_excluded:
+        removed_this_pass: set[str] = set()
+        for model_name, base_name, is_log in candidates:
+            if model_name in removed_this_pass:
                 continue  # eliminated earlier in this same pass
             if iteration >= effective_max_iterations:
                 hit_cap = True
                 break
 
-            trial_excluded = [*best_excluded, var]
-            if not [c for c in all_vars if c not in trial_excluded]:
+            if is_log:
+                trial_excluded = best_excluded
+                trial_log = [c for c in best_log if c != base_name]
+            else:
+                trial_excluded = [*best_excluded, base_name]
+                trial_log = best_log
+
+            if not build_model_variables(
+                all_base_cols, y_col, trial_excluded, trial_log
+            ):
                 continue  # would remove the last remaining predictor
 
             try:
-                trial_result = _run(trial_excluded)
+                trial_result = _run(trial_excluded, trial_log)
                 trial_rmsep = _rmsep_at_optimal(trial_result)
             except ValidationError:
                 continue
 
             if trial_rmsep <= best_rmsep + tolerance:
                 best_excluded = trial_excluded
+                best_log = trial_log
                 best_rmsep = trial_rmsep
                 best_result = trial_result
                 eliminated_in_pass = True
+                removed_this_pass.add(model_name)
                 iteration += 1
                 history.append(
-                    {"iteration": iteration, "removed_col": var, "rmsep": trial_rmsep}
+                    {
+                        "iteration": iteration,
+                        "removed_col": model_name,
+                        "rmsep": trial_rmsep,
+                    }
                 )
                 if iteration >= effective_max_iterations:
                     hit_cap = True
@@ -558,6 +662,7 @@ def optimize_variables(
     return {
         "history": history,
         "final_excluded_cols": best_excluded,
+        "final_log_x_cols": best_log,
         "results": best_result,
         "stop_reason": stop_reason,
     }
@@ -568,59 +673,70 @@ def simulate_change(
     coefficients_raw: dict[str, float],
     x_means_raw: dict[str, float],
     log_y: bool,
-    log_x_cols: list[str] | None,
+    x_var_bases: dict[str, str],
     changes: dict[str, dict],
 ) -> dict:
-    """What-if simulation: change one or more X-variables from their
-    baseline means (both given and returned in original raw units) and
-    predict the resulting Y.
+    """What-if simulation: change one or more X-variables (by BASE name)
+    from their baseline means (both given and returned in original raw
+    units) and predict the resulting Y.
 
-    changes: {var: {"mode": "absolute"|"percent", "value": float}}.
+    x_var_bases maps each model variable (a coefficients_raw/x_means_raw
+    key) to its base variable name (see build_model_variables); model_var
+    != base_var marks a log10-derived term. A base with both a linear and a
+    log10 term contributes twice to y (once per term, using the same
+    changed base value); `contributions[base]` is their sum.
+
+    changes: {base: {"mode": "absolute"|"percent", "value": float}}.
     "absolute" adds `value` to the baseline; "percent" scales it by
-    (1 + value/100). log10 is applied internally to log_x_cols variables
-    when computing the model-scale prediction; `contributions` is reported
-    on that model scale (additive - unlike the raw-scale `delta`, which is
-    not simply the sum of contributions when log_y makes the back-transform
+    (1 + value/100). log10 is applied internally to log-derived terms when
+    computing the model-scale prediction; `contributions` is reported on
+    that model scale (additive - unlike the raw-scale `delta`, which is not
+    simply the sum of contributions when log_y makes the back-transform
     nonlinear).
 
-    Raises ValidationError (Norwegian message) for: an unknown variable
-    name, an unrecognized change mode, or a change that drives a
-    log-selected variable to a non-positive value.
+    Raises ValidationError (Norwegian message) for: an unknown base
+    variable name, an unrecognized change mode, or a change that drives a
+    log-derived term's base value to a non-positive value.
     """
-    log_x_col_set = set(log_x_cols or [])
+    x_var_bases = x_var_bases or {}
     changes = changes or {}
+    log_model_cols = {mv for mv, bv in x_var_bases.items() if mv != bv}
+    base_names = set(x_var_bases.values())
 
-    for var in changes:
-        if var not in coefficients_raw:
-            raise ValidationError(f"Ukjent variabel: '{var}'.")
+    for base in changes:
+        if base not in base_names:
+            raise ValidationError(f"Ukjent variabel: '{base}'.")
 
     y_base_model = intercept
     y_new_model = intercept
     contributions: dict[str, float] = {}
 
     for var, coef in coefficients_raw.items():
+        base = x_var_bases.get(var, var)
         x_base = x_means_raw[var]
-        base_input = _model_input(var, x_base, log_x_col_set)
+        base_input = _model_input(var, x_base, log_model_cols)
         y_base_model += coef * base_input
 
         x_new = x_base
-        if var in changes:
-            mode = changes[var].get("mode")
-            value = changes[var].get("value", 0.0)
+        if base in changes:
+            mode = changes[base].get("mode")
+            value = changes[base].get("value", 0.0)
             if mode == "percent":
                 x_new = x_base * (1 + value / 100.0)
             elif mode == "absolute":
                 x_new = x_base + value
             else:
                 raise ValidationError(
-                    f"Ukjent modus '{mode}' for '{var}'. Bruk 'absolute' eller 'percent'."
+                    f"Ukjent modus '{mode}' for '{base}'. Bruk 'absolute' eller 'percent'."
                 )
 
-        new_input = _model_input(var, x_new, log_x_col_set)
+        new_input = _model_input(var, x_new, log_model_cols)
         y_new_model += coef * new_input
 
-        if var in changes:
-            contributions[var] = float(coef * (new_input - base_input))
+        if base in changes:
+            contributions[base] = contributions.get(base, 0.0) + float(
+                coef * (new_input - base_input)
+            )
 
     if log_y:
         y_base = float(10**y_base_model)

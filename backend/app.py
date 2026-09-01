@@ -119,7 +119,7 @@ class SimulateRequest(BaseModel):
     coefficients_raw: dict[str, float]
     x_means_raw: dict[str, float]
     log_y: bool = False
-    log_x_cols: list[str] = []
+    x_var_bases: dict[str, str] = {}
     changes: dict[str, SimulateChangeEntry] = {}
 
 
@@ -274,7 +274,7 @@ async def simulate(request: SimulateRequest):
             coefficients_raw=request.coefficients_raw,
             x_means_raw=request.x_means_raw,
             log_y=request.log_y,
-            log_x_cols=request.log_x_cols,
+            x_var_bases=request.x_var_bases,
             changes=changes,
         )
     except ValidationError as err:

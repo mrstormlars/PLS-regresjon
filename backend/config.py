@@ -54,3 +54,6 @@ MAX_OPTIMIZE_ITERATIONS = 50
 
 # POST /api/report: downloaded filename is "<prefix>-<YYYY-MM-DD>.html".
 REPORT_FILENAME_PREFIX = "pls-rapport"
+
+# Model-variable name for a log10-derived term, given its base column name.
+LOG_COLUMN_NAME_FORMAT = "log10({col})"

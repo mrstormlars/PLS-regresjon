@@ -83,14 +83,19 @@ def test_run_analysis_applies_limits_and_log_y():
 
 
 def test_run_analysis_log_x_cols_applies_log10_before_standardization():
-    # Y == log10(X1) exactly, so log-transforming X1 should let a single
-    # component fit near-perfectly.
+    # Y == log10(X1) exactly, so log-transforming X1 (log-only: excluded from
+    # the linear term) should let a single component fit near-perfectly.
     n = 30
     x1 = np.array([10.0**k for k in range(1, n + 1)])
     y = np.arange(1, n + 1, dtype=float)
     df = pd.DataFrame({"X1": x1, "Y": y})
     result = analysis.run_analysis(
-        df, y_col="Y", log_x_cols=["X1"], max_components=1, cv_folds=3
+        df,
+        y_col="Y",
+        excluded_cols=["X1"],
+        log_x_cols=["X1"],
+        max_components=1,
+        cv_folds=3,
     )
     assert result["r2_cal"] > 0.99
 
@@ -292,6 +297,39 @@ def test_optimize_variables_reports_too_few_variables_when_natural_bound_hit():
     assert result["stop_reason"] == "too_few_variables"
 
 
+def test_optimize_variables_can_remove_log_and_linear_terms_independently():
+    # (i) optimize_variables operates in model-variable space: a log-only
+    # term and a linear term can each be removed independently, shrinking
+    # final_log_x_cols and growing final_excluded_cols respectively, with
+    # history[].removed_col using model-variable names.
+    rng = np.random.default_rng(11)
+    n = 60
+    signal = rng.normal(size=n)
+    log_noise_base = rng.uniform(1.0, 10.0, size=n)  # positive, for log10
+    lin_noise = rng.normal(size=n)
+    y = 5.0 * signal + rng.normal(scale=0.02, size=n)
+    df = pd.DataFrame(
+        {"Signal": signal, "LogNoise": log_noise_base, "LinNoise": lin_noise, "Y": y}
+    )
+
+    result = analysis.optimize_variables(
+        df,
+        y_col="Y",
+        excluded_cols=["LogNoise"],  # log-only: excluded from the linear term
+        log_x_cols=["LogNoise"],
+        max_components=2,
+        cv_folds=5,
+        tolerance=0.0,
+    )
+
+    removed = {h["removed_col"] for h in result["history"]}
+    assert "log10(LogNoise)" in removed
+    assert "LinNoise" in removed
+    assert "LogNoise" not in result["final_log_x_cols"]
+    assert "LinNoise" in result["final_excluded_cols"]
+    assert "Signal" in result["results"]["coefficients"]
+
+
 def test_run_analysis_raw_coefficients_recover_true_linear_betas():
     rng = np.random.default_rng(0)
     n = 50
@@ -352,8 +390,10 @@ def test_run_analysis_raw_coefficients_equivalent_on_log_y_scale():
 
 def test_run_analysis_raw_coefficients_equivalent_with_log_x_cols():
     # Regression test for the log_x_cols back-scaling path specifically:
-    # "raw" for a log10-selected column is post-log10, pre-standardization,
-    # so the equivalence check must compare against log10(X1), not X1 itself.
+    # "raw" for a log10-derived term is post-log10, pre-standardization, so
+    # the equivalence check must compare against log10(X1), not X1 itself.
+    # X1 is excluded from the linear term (log-only) so the model has a
+    # single term per base column, matching the true relationship exactly.
     n = 40
     rng = np.random.default_rng(3)
     x1 = np.abs(rng.normal(loc=100, scale=20, size=n)) + 1.0  # positive, for log10
@@ -363,15 +403,157 @@ def test_run_analysis_raw_coefficients_equivalent_with_log_x_cols():
     df = pd.DataFrame({"X1": x1, "X2": x2, "X3": x3, "Y": y})
 
     result = analysis.run_analysis(
-        df, y_col="Y", log_x_cols=["X1"], max_components=3, cv_folds=5
+        df,
+        y_col="Y",
+        excluded_cols=["X1"],
+        log_x_cols=["X1"],
+        max_components=3,
+        cv_folds=5,
     )
-    x_cols = ["X1", "X2", "X3"]
+    x_cols = ["log10(X1)", "X2", "X3"]
 
     raw_df = df.copy()
-    raw_df["X1"] = np.log10(raw_df["X1"])
+    raw_df["log10(X1)"] = np.log10(raw_df["X1"])
 
     max_error = _raw_coefficient_equivalence_max_error(raw_df, result, x_cols, df["Y"])
     assert max_error < 1e-8
+
+
+def make_derived_variable_dataset(n_rows: int = 40, seed: int = 7) -> pd.DataFrame:
+    """Two-predictor dataset where Y depends on both X1 (linear) and
+    log10(X1) separately, plus a linear X2, for exercising log10 as an
+    independent derived model variable (see analysis.build_model_variables).
+    """
+    rng = np.random.default_rng(seed)
+    x1 = np.abs(rng.normal(loc=50, scale=10, size=n_rows)) + 1.0  # positive, for log10
+    x2 = rng.normal(size=n_rows)
+    y = 0.1 * x1 + 3.0 * np.log10(x1) - 1.5 * x2 + rng.normal(scale=0.02, size=n_rows)
+    return pd.DataFrame({"X1": x1, "X2": x2, "Y": y})
+
+
+def test_run_analysis_log_selected_excluded_base_uses_log_term_only():
+    # X-checkbox unchecked, log10 checked -> only log10(X1), never raw X1.
+    df = make_derived_variable_dataset()
+    result = analysis.run_analysis(
+        df,
+        y_col="Y",
+        excluded_cols=["X1"],
+        log_x_cols=["X1"],
+        max_components=2,
+        cv_folds=5,
+    )
+    assert "log10(X1)" in result["coefficients"]
+    assert "X1" not in result["coefficients"]
+
+
+def test_run_analysis_log_selected_included_base_has_both_terms():
+    # X-checkbox checked AND log10 checked -> both X1 and log10(X1) as
+    # separate model variables (no more overwrite-in-place).
+    df = make_derived_variable_dataset()
+    result = analysis.run_analysis(
+        df, y_col="Y", log_x_cols=["X1"], max_components=2, cv_folds=5
+    )
+    assert "X1" in result["coefficients"]
+    assert "log10(X1)" in result["coefficients"]
+
+
+def test_run_analysis_neither_checked_base_absent():
+    # Neither checkbox checked -> the base column is absent entirely.
+    df = make_derived_variable_dataset()
+    result = analysis.run_analysis(
+        df, y_col="Y", excluded_cols=["X1"], max_components=1, cv_folds=5
+    )
+    assert set(result["coefficients"]) == {"X2"}
+
+
+def test_run_analysis_included_not_log_selected_only_linear():
+    # Regression guard: X-checkbox checked, log10 unchecked -> only X1.
+    df = make_derived_variable_dataset()
+    result = analysis.run_analysis(df, y_col="Y", max_components=2, cv_folds=5)
+    assert "X1" in result["coefficients"]
+    assert "log10(X1)" not in result["coefficients"]
+
+
+def test_run_analysis_x_var_bases_maps_model_names_to_base():
+    df = make_derived_variable_dataset()
+    result = analysis.run_analysis(
+        df, y_col="Y", log_x_cols=["X1"], max_components=2, cv_folds=5
+    )
+    assert result["x_var_bases"]["log10(X1)"] == "X1"
+    assert result["x_var_bases"]["X1"] == "X1"
+    assert result["x_var_bases"]["X2"] == "X2"
+
+
+def test_run_analysis_x_means_raw_for_log_term_uses_raw_base_mean():
+    # x_means_raw's value for a log10-derived term must be the mean of the
+    # RAW (pre-log10) base column, not mean(log10(base)) - these differ
+    # whenever the base column isn't constant (Jensen's inequality), and
+    # only the raw-mean convention matches _predict_raw's contract (it
+    # applies log10 internally to a raw value).
+    df = make_derived_variable_dataset()
+    result = analysis.run_analysis(
+        df,
+        y_col="Y",
+        excluded_cols=["X1"],
+        log_x_cols=["X1"],
+        max_components=1,
+        cv_folds=5,
+    )
+    raw_mean = df["X1"].mean()
+    log_mean = np.log10(df["X1"]).mean()
+    assert raw_mean != pytest.approx(
+        log_mean
+    )  # sanity: the two are actually distinguishable
+    assert result["x_means_raw"]["log10(X1)"] == pytest.approx(raw_mean, abs=1e-8)
+
+
+def test_run_analysis_raw_coefficient_equivalence_with_both_terms():
+    df = make_derived_variable_dataset()
+    result = analysis.run_analysis(
+        df, y_col="Y", log_x_cols=["X1"], max_components=3, cv_folds=5
+    )
+    x_cols = ["X1", "log10(X1)", "X2"]
+    raw_df = df.copy()
+    raw_df["log10(X1)"] = np.log10(raw_df["X1"])
+    max_error = _raw_coefficient_equivalence_max_error(raw_df, result, x_cols, df["Y"])
+    assert max_error < 1e-8
+
+
+def test_build_model_variables_collision_raises_validation_error():
+    # A derived log10 name that collides with an existing data column is
+    # rejected with a Norwegian message.
+    all_cols = ["X1", "log10(X1)"]
+    with pytest.raises(ValidationError, match="log10"):
+        analysis.build_model_variables(
+            all_cols, y_col="Y", excluded_cols=[], log_x_cols=["X1"]
+        )
+
+
+def test_run_analysis_limit_on_log_only_base_column_still_filters_rows():
+    # _apply_limits runs on base columns before column-dropping, so a limit
+    # on a log-only base column (excluded from the linear term) still
+    # filters rows - a deliberate behaviour change from dropping columns
+    # before deriving/limiting.
+    df = make_derived_variable_dataset()
+    unfiltered = analysis.run_analysis(
+        df,
+        y_col="Y",
+        excluded_cols=["X1"],
+        log_x_cols=["X1"],
+        max_components=1,
+        cv_folds=5,
+    )
+    x1_median = df["X1"].median()
+    filtered = analysis.run_analysis(
+        df,
+        y_col="Y",
+        excluded_cols=["X1"],
+        log_x_cols=["X1"],
+        limits={"X1": {"low": x1_median}},
+        max_components=1,
+        cv_folds=5,
+    )
+    assert len(filtered["diagnostics"]) < len(unfiltered["diagnostics"])
 
 
 def _missing_value_dataset(n_rows: int = 15) -> pd.DataFrame:
@@ -434,7 +616,7 @@ def test_simulate_change_linear_delta_is_exact():
         coefficients_raw={"X1": 2.0, "X2": -1.5},
         x_means_raw={"X1": 50.0, "X2": 20.0},
         log_y=False,
-        log_x_cols=[],
+        x_var_bases={"X1": "X1", "X2": "X2"},
         changes={"X1": {"mode": "absolute", "value": 5.0}},
     )
     assert result["delta"] == pytest.approx(2.0 * 5.0, abs=1e-8)
@@ -450,7 +632,7 @@ def test_simulate_change_log_y_multiplicative_effect():
         coefficients_raw,
         x_means_raw,
         log_y=True,
-        log_x_cols=[],
+        x_var_bases={"X1": "X1"},
         changes={"X1": {"mode": "percent", "value": 10.0}},
     )
     y_base_expected = 10 ** (intercept + 0.3 * 100.0)
@@ -460,38 +642,84 @@ def test_simulate_change_log_y_multiplicative_effect():
 
 
 def test_simulate_change_log_x_contribution_uses_log10_difference():
+    # "X1" here is log-only: its sole model variable is "log10(X1)".
     result = analysis.simulate_change(
         intercept=2.0,
-        coefficients_raw={"X1": 5.0},
-        x_means_raw={"X1": 100.0},
+        coefficients_raw={"log10(X1)": 5.0},
+        x_means_raw={"log10(X1)": 100.0},
         log_y=False,
-        log_x_cols=["X1"],
+        x_var_bases={"log10(X1)": "X1"},
         changes={"X1": {"mode": "absolute", "value": 900.0}},
     )
     expected = 5.0 * (np.log10(1000.0) - np.log10(100.0))
     assert result["contributions"]["X1"] == pytest.approx(expected, abs=1e-8)
 
 
+def test_simulate_change_percent_mode_scales_raw_base_before_log10():
+    # A percent change on a log-derived variable must scale the RAW base
+    # value before taking log10, not scale the already-log10'd baseline
+    # itself (log10 isn't linear, so these differ whenever x_base != 1).
+    b_log = 5.0
+    x_base = 100.0
+    percent = 20.0
+    result = analysis.simulate_change(
+        intercept=1.0,
+        coefficients_raw={"log10(X1)": b_log},
+        x_means_raw={"log10(X1)": x_base},
+        log_y=False,
+        x_var_bases={"log10(X1)": "X1"},
+        changes={"X1": {"mode": "percent", "value": percent}},
+    )
+    x_new = x_base * (1 + percent / 100.0)
+    expected_delta = b_log * (np.log10(x_new) - np.log10(x_base))
+    assert result["delta"] == pytest.approx(expected_delta, abs=1e-8)
+
+
+def test_simulate_change_both_terms_move_y_together():
+    # (g) A base with both a linear and a log10 term: both use the same
+    # changed base value, and contributions[base] is their sum.
+    b_lin, b_log = 2.0, 5.0
+    x_base = 100.0
+    dx = 20.0
+    result = analysis.simulate_change(
+        intercept=1.0,
+        coefficients_raw={"X1": b_lin, "log10(X1)": b_log},
+        x_means_raw={"X1": x_base, "log10(X1)": x_base},
+        log_y=False,
+        x_var_bases={"X1": "X1", "log10(X1)": "X1"},
+        changes={"X1": {"mode": "absolute", "value": dx}},
+    )
+    x_new = x_base + dx
+    expected_delta = b_lin * dx + b_log * (np.log10(x_new) - np.log10(x_base))
+    assert result["delta"] == pytest.approx(expected_delta, abs=1e-8)
+    assert set(result["contributions"]) == {"X1"}
+    assert result["contributions"]["X1"] == pytest.approx(expected_delta, abs=1e-8)
+
+
 def test_simulate_change_rejects_non_positive_log_x_value():
-    with pytest.raises(ValidationError, match="positiv"):
+    # (h) The error names the BASE variable ("X1"), not the derived name.
+    with pytest.raises(ValidationError, match="'X1'") as exc_info:
         analysis.simulate_change(
             intercept=2.0,
-            coefficients_raw={"X1": 5.0},
-            x_means_raw={"X1": 100.0},
+            coefficients_raw={"log10(X1)": 5.0},
+            x_means_raw={"log10(X1)": 100.0},
             log_y=False,
-            log_x_cols=["X1"],
+            x_var_bases={"log10(X1)": "X1"},
             changes={"X1": {"mode": "absolute", "value": -1000.0}},
         )
+    assert "positiv" in str(exc_info.value)
+    assert "log10(X1)" not in str(exc_info.value)
 
 
 def test_simulate_change_rejects_unknown_variable():
+    # (h) Unknown-variable validation is against the set of base names.
     with pytest.raises(ValidationError, match="Ukjent variabel"):
         analysis.simulate_change(
             intercept=2.0,
             coefficients_raw={"X1": 5.0},
             x_means_raw={"X1": 100.0},
             log_y=False,
-            log_x_cols=[],
+            x_var_bases={"X1": "X1"},
             changes={"X99": {"mode": "absolute", "value": 1.0}},
         )
 
@@ -502,7 +730,7 @@ def test_simulate_change_empty_changes_is_a_no_op():
         coefficients_raw={"X1": 5.0, "X2": -1.0},
         x_means_raw={"X1": 100.0, "X2": 10.0},
         log_y=False,
-        log_x_cols=[],
+        x_var_bases={"X1": "X1", "X2": "X2"},
         changes={},
     )
     assert result["y_new"] == result["y_base"]
