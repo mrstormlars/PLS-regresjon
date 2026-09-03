@@ -4,194 +4,261 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PLS-regresjon</title>
+  <link rel="icon" href="favicon.svg" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <h1>PLS-regresjonsanalyse</h1>
+  <header class="app-header">
+    <svg class="app-mark" viewBox="0 0 32 32" aria-hidden="true">
+      <circle cx="9" cy="20" r="2" fill="#ffffff" />
+      <circle cx="16" cy="13" r="2" fill="#ffffff" />
+      <circle cx="23" cy="17" r="2" fill="#ffffff" />
+      <line x1="9" y1="20" x2="23" y2="12" stroke="#E8743B" stroke-width="1.6" stroke-linecap="round" />
+    </svg>
+    <h1>PLS-regresjon</h1>
+  </header>
 
-  <section id="upload-section">
-    <h2>1. Last opp datasett</h2>
-    <input type="file" id="file-input" accept=".xlsx,.csv" />
-    <button id="upload-button">Last opp</button>
-    <p id="upload-status" class="status"></p>
-  </section>
+  <nav class="nav-rail">
+    <a class="nav-link" href="#data" data-view="data">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0-12l-4 4m4-4l4 4M5 21h14" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" /></svg>
+      <span>Data</span>
+    </a>
+    <a class="nav-link locked" href="#modell" data-view="modell">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 21v-6M4 11V3m8 18v-9m0-3V3m8 18v-4m0-4V3M2 15h4m4-6h4m8 8h4" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" /></svg>
+      <span>Modell</span>
+    </a>
+    <a class="nav-link locked" href="#resultater" data-view="resultater">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10m7 10V4m7 16v-7" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" /></svg>
+      <span>Resultater</span>
+    </a>
+    <a class="nav-link locked" href="#simulering" data-view="simulering">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6l1 4-3 3v9H11v-9L8 7l1-4Z" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
+      <span>Simulering</span>
+    </a>
+  </nav>
 
-  <section id="sheet-section" class="hidden">
-    <h2>2. Velg ark og rader</h2>
-    <label for="sheet-select">Ark:</label>
-    <select id="sheet-select"></select>
+  <main class="content">
+    <section id="view-data" class="view">
+      <h2 class="view-title">Data</h2>
+      <p class="view-subtitle">Last opp et datasett og velg hvilket område som skal brukes.</p>
 
-    <label for="header-row-input">Header-rad (Excel-radnummer):</label>
-    <input type="number" id="header-row-input" value="1" min="1" />
+      <div class="card" id="upload-section">
+        <h3>Last opp datasett</h3>
+        <input type="file" id="file-input" class="input" accept=".xlsx,.csv" />
+        <button id="upload-button" class="btn btn-primary">Last opp</button>
+        <p id="upload-status" class="status"></p>
+      </div>
 
-    <label for="start-row-input">Startrad (Excel-radnummer, valgfritt):</label>
-    <input type="number" id="start-row-input" min="1" />
+      <div class="card hidden" id="sheet-section">
+        <h3>Velg ark og rader</h3>
+        <div class="grid-2col">
+          <label for="sheet-select">Ark
+            <select id="sheet-select" class="input"></select>
+          </label>
+          <label for="header-row-input">Header-rad (Excel-radnummer)
+            <input type="number" id="header-row-input" class="input" value="1" min="1" />
+          </label>
+          <label for="start-row-input">Startrad (Excel-radnummer, valgfritt)
+            <input type="number" id="start-row-input" class="input" min="1" />
+          </label>
+          <label for="end-row-input">Sluttrad (Excel-radnummer, valgfritt)
+            <input type="number" id="end-row-input" class="input" min="1" />
+          </label>
+          <label for="start-col-input">Startkolonne (bokstav eller tall, valgfritt)
+            <input type="text" id="start-col-input" class="input" placeholder="f.eks. A eller 1" />
+          </label>
+          <label for="end-col-input">Sluttkolonne (bokstav eller tall, valgfritt)
+            <input type="text" id="end-col-input" class="input" placeholder="f.eks. D eller 4" />
+          </label>
+        </div>
+        <button id="preview-button" class="btn btn-primary">Forhåndsvis</button>
+        <p id="preview-status" class="status"></p>
+      </div>
 
-    <label for="end-row-input">Sluttrad (Excel-radnummer, valgfritt):</label>
-    <input type="number" id="end-row-input" min="1" />
+      <div class="card hidden" id="preview-section">
+        <h3>Forhåndsvisning</h3>
+        <div id="preview-table-container"></div>
+      </div>
+    </section>
 
-    <label for="start-col-input">Startkolonne (bokstav eller tall, valgfritt):</label>
-    <input type="text" id="start-col-input" placeholder="f.eks. A eller 1" />
+    <section id="view-model" class="view hidden">
+      <h2 class="view-title">Modell</h2>
+      <p class="view-subtitle">Velg respons- og prediktorvariabler, grenseverdier og innstillinger.</p>
 
-    <label for="end-col-input">Sluttkolonne (bokstav eller tall, valgfritt):</label>
-    <input type="text" id="end-col-input" placeholder="f.eks. D eller 4" />
+      <div class="card">
+        <h3>Variabler</h3>
+        <label for="y-col-select">Y-variabel (respons)
+          <select id="y-col-select" class="input"></select>
+        </label>
 
-    <button id="preview-button">Forhåndsvis</button>
-    <p id="preview-status" class="status"></p>
-  </section>
+        <table class="x-col-table">
+          <thead>
+            <tr>
+              <th>Variabel</th>
+              <th>X</th>
+              <th>log10</th>
+              <th>Min</th>
+              <th>Maks</th>
+            </tr>
+          </thead>
+          <tbody id="x-cols-container"></tbody>
+        </table>
+      </div>
 
-  <section id="preview-section" class="hidden">
-    <h2>3. Forhåndsvisning</h2>
-    <div id="preview-table-container"></div>
-  </section>
+      <div class="card">
+        <h3>Innstillinger</h3>
+        <div class="grid-2col">
+          <label>
+            <input type="checkbox" id="log-y-checkbox" />
+            Bruk log10 av Y-variabelen
+          </label>
+          <label for="max-components-input">Maks antall komponenter
+            <input type="number" id="max-components-input" class="input" value="10" min="1" />
+          </label>
+          <label for="cv-folds-input">Antall CV-folder
+            <input type="number" id="cv-folds-input" class="input" value="10" min="2" />
+          </label>
+          <label for="excluded-rows-input">Ekskluderte rader (kommaseparerte Excel-radnumre)
+            <input type="text" id="excluded-rows-input" class="input" placeholder="f.eks. 3, 17, 42" />
+          </label>
+        </div>
+      </div>
+    </section>
 
-  <section id="config-section" class="hidden">
-    <h2>4. Velg variabler og innstillinger</h2>
+    <section id="view-results" class="view hidden">
+      <h2 class="view-title">Resultater</h2>
+      <p class="view-subtitle">Diagnostikk, plott og forslag for den kjørte analysen.</p>
 
-    <label for="y-col-select">Y-variabel (respons):</label>
-    <select id="y-col-select"></select>
+      <div id="key-figures" class="stat-tiles"></div>
 
-    <fieldset id="x-cols-fieldset">
-      <legend>X-variabler (prediktorer)</legend>
-      <div id="x-cols-container"></div>
-    </fieldset>
+      <p id="missing-values-summary" class="status hidden"></p>
 
-    <fieldset id="limits-fieldset">
-      <legend>Grenseverdier per kolonne (valgfritt)</legend>
-      <div id="limits-container"></div>
-    </fieldset>
+      <div class="plot-grid">
+        <div class="card">
+          <h3>RMSEP/RMSEC vs. antall komponenter</h3>
+          <div id="rmse-chart" class="plot"></div>
+        </div>
+        <div class="card">
+          <h3>Predikert vs. faktisk Y</h3>
+          <p class="status">Klikk for å markere en rad, Ctrl+klikk for å legge til/fjerne, eller dra for å markere flere.</p>
+          <div id="predicted-actual-chart" class="plot"></div>
+        </div>
+        <div class="card">
+          <h3>Scores (PC1 vs. PC2)</h3>
+          <div id="scores-chart" class="plot"></div>
+        </div>
+        <div class="card">
+          <h3>Koeffisienter</h3>
+          <div class="segmented-control">
+            <label>
+              <input type="radio" name="coef-view" value="normalized" id="coef-view-normalized" checked />
+              Normaliserte
+            </label>
+            <label>
+              <input type="radio" name="coef-view" value="raw" id="coef-view-raw" />
+              Rå
+            </label>
+          </div>
+          <p class="status">
+            Merk: koeffisienter for log10-transformerte variabler gjelder log10-verdien av
+            variabelen, ikke den opprinnelige verdien.
+          </p>
+          <p class="status">Klikk på en søyle for å markere en kolonne, Ctrl+klikk for å legge til/fjerne, eller dra for å markere flere.</p>
+          <div id="coefficients-chart" class="plot"></div>
+        </div>
+      </div>
 
-    <label>
-      <input type="checkbox" id="log-y-checkbox" />
-      Bruk log10 av Y-variabelen
-    </label>
+      <div class="card" id="selection-controls">
+        <h3>Markering</h3>
+        <p id="row-selection-summary" class="status">Ingen rader markert.</p>
+        <p id="col-selection-summary" class="status">Ingen kolonner markert.</p>
+      </div>
 
-    <label for="max-components-input">Maks antall komponenter:</label>
-    <input type="number" id="max-components-input" value="10" min="1" />
+      <div class="two-col-card">
+        <div class="card" id="suggestions-section">
+          <h3>Forslag</h3>
+          <label for="suggest-outlier-method-select">Metode
+            <select id="suggest-outlier-method-select" class="input">
+              <option value="y_distance">Y-avstand</option>
+              <option value="X_distance">X-avstand</option>
+              <option value="T2">T²</option>
+            </select>
+          </label>
+          <label for="suggest-outlier-threshold-input">Terskel (valgfritt)
+            <input type="number" id="suggest-outlier-threshold-input" class="input" step="any" />
+          </label>
+          <button id="suggest-outliers-button" class="btn btn-outline">Foreslå uteliggere</button>
+          <h4>Uteliggerkart</h4>
+          <p class="status">
+            X-avstand vs. y-avstand per rad, farget etter T². Bruk kartet til å vurdere hvor
+            terskelen bør settes; markering her følger de andre radplottene.
+          </p>
+          <div id="outlier-map-chart" class="plot"></div>
+          <label for="suggest-low-impact-threshold-input">Terskel (valgfritt)
+            <input type="number" id="suggest-low-impact-threshold-input" class="input" step="any" />
+          </label>
+          <button id="suggest-low-impact-button" class="btn btn-outline">Foreslå variabler med lav påvirkning</button>
+          <p id="suggestion-status" class="status"></p>
+        </div>
 
-    <label for="cv-folds-input">Antall CV-folder:</label>
-    <input type="number" id="cv-folds-input" value="10" min="2" />
+        <div class="card" id="optimize-section">
+          <h3>Automatisk variabeloptimalisering</h3>
+          <p>Trinn 1: kjør optimaliseringen. Forslaget markerer variabler i koeffisientplottet over, men endrer ingenting automatisk.</p>
+          <label for="optimize-tolerance-input">Toleranse for RMSEP-økning
+            <input type="number" id="optimize-tolerance-input" class="input" step="any" value="0" />
+          </label>
+          <button id="optimize-button" class="btn btn-outline">Optimaliser variabler</button>
+          <p id="optimize-status" class="status"></p>
+          <div id="optimize-history-chart" class="plot hidden"></div>
+          <div id="optimize-summary"></div>
+          <p>Trinn 2: bruk forslaget for å fjerne de markerte variablene og oppdatere resultatene.</p>
+          <button id="apply-optimized-button" class="btn btn-accent hidden">Bruk optimalisert utvalg</button>
+        </div>
+      </div>
+    </section>
 
-    <label for="excluded-rows-input">Ekskluderte rader (kommaseparerte Excel-radnumre):</label>
-    <input type="text" id="excluded-rows-input" placeholder="f.eks. 3, 17, 42" />
+    <section id="view-simulation" class="view hidden">
+      <h2 class="view-title">Simulering</h2>
+      <p class="view-subtitle">Hva-hvis-simulering på rå enheter, basert på siste analyse.</p>
 
-    <button id="analyze-button">Kjør analyse</button>
+      <div class="card" id="simulation-section">
+        <p class="status">
+          Verdiene under er i rå enheter (før forbehandling/log10/standardisering).
+          Ekskluderte variabler vises ikke.
+        </p>
+        <button id="simulation-reset-button" class="btn btn-outline">Nullstill</button>
+        <p id="simulation-status" class="status"></p>
+        <div id="preview-table-container-sim">
+          <table id="simulation-table">
+            <thead>
+              <tr>
+                <th>Variabel</th>
+                <th>Basisverdi (rå)</th>
+                <th>Endring</th>
+                <th>Modus</th>
+                <th>Simulert Y</th>
+                <th>Endring (absolutt)</th>
+                <th>Endring (%)</th>
+              </tr>
+            </thead>
+            <tbody id="simulation-table-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div id="action-bar">
+    <span id="file-chip" class="chip"></span>
+    <span id="selection-chip" class="chip">Ingen markering</span>
+    <button id="analyze-button" class="btn btn-primary">Kjør analyse</button>
+    <button id="export-report-button" class="btn btn-outline" disabled>Eksporter rapport (HTML)</button>
+    <button id="clear-selection-button" class="btn btn-outline">Fjern markering</button>
+    <button id="rerun-without-selected-button" class="btn btn-outline" disabled>Kjør på nytt uten markerte</button>
+    <button id="rerun-only-selected-button" class="btn btn-outline" disabled>Kjør kun med markerte</button>
     <p id="analyze-status" class="status"></p>
-  </section>
-
-  <section id="results-section" class="hidden">
-    <h2>5. Resultater</h2>
-
-    <div id="key-figures"></div>
-
-    <p id="missing-values-summary" class="status hidden"></p>
-
-    <button id="export-report-button" disabled>Eksporter rapport (HTML)</button>
     <p id="export-report-status" class="status"></p>
-
-    <h3>RMSEP/RMSEC vs. antall komponenter</h3>
-    <div id="rmse-chart" class="plot"></div>
-
-    <h3>Predikert vs. faktisk Y</h3>
-    <p class="status">Klikk for å markere en rad, Ctrl+klikk for å legge til/fjerne, eller dra for å markere flere.</p>
-    <div id="predicted-actual-chart" class="plot"></div>
-
-    <h3>Scores (PC1 vs. PC2)</h3>
-    <div id="scores-chart" class="plot"></div>
-
-    <h3>Koeffisienter</h3>
-    <p>
-      <label style="display: inline-block; font-weight: normal;">
-        <input type="radio" name="coef-view" value="normalized" id="coef-view-normalized" checked />
-        Normaliserte
-      </label>
-      <label style="display: inline-block; font-weight: normal; margin-left: 1rem;">
-        <input type="radio" name="coef-view" value="raw" id="coef-view-raw" />
-        Rå
-      </label>
-    </p>
-    <p class="status">
-      Merk: koeffisienter for log10-transformerte variabler gjelder log10-verdien av
-      variabelen, ikke den opprinnelige verdien.
-    </p>
-    <p class="status">Klikk på en søyle for å markere en kolonne, Ctrl+klikk for å legge til/fjerne, eller dra for å markere flere.</p>
-    <div id="coefficients-chart" class="plot"></div>
-
-    <div id="selection-controls">
-      <h3>Markering</h3>
-      <p id="row-selection-summary" class="status">Ingen rader markert.</p>
-      <p id="col-selection-summary" class="status">Ingen kolonner markert.</p>
-      <button id="clear-selection-button">Fjern markering</button>
-      <button id="rerun-without-selected-button" disabled>Kjør på nytt uten markerte</button>
-      <button id="rerun-only-selected-button" disabled>Kjør kun med markerte</button>
-    </div>
-
-    <div id="suggestions-section">
-      <h3>Forslag</h3>
-      <p>
-        <label for="suggest-outlier-method-select">Metode:</label>
-        <select id="suggest-outlier-method-select">
-          <option value="y_distance">Y-avstand</option>
-          <option value="X_distance">X-avstand</option>
-          <option value="T2">T²</option>
-        </select>
-        <label for="suggest-outlier-threshold-input">Terskel (valgfritt):</label>
-        <input type="number" id="suggest-outlier-threshold-input" step="any" />
-        <button id="suggest-outliers-button">Foreslå uteliggere</button>
-      </p>
-      <h4>Uteliggerkart</h4>
-      <p class="status">
-        X-avstand vs. y-avstand per rad, farget etter T². Bruk kartet til å vurdere hvor
-        terskelen bør settes; markering her følger de andre radplottene.
-      </p>
-      <div id="outlier-map-chart" class="plot"></div>
-      <p>
-        <label for="suggest-low-impact-threshold-input">Terskel (valgfritt):</label>
-        <input type="number" id="suggest-low-impact-threshold-input" step="any" />
-        <button id="suggest-low-impact-button">Foreslå variabler med lav påvirkning</button>
-      </p>
-      <p id="suggestion-status" class="status"></p>
-    </div>
-
-    <div id="optimize-section">
-      <h3>Automatisk variabeloptimalisering</h3>
-      <p>Trinn 1: kjør optimaliseringen. Forslaget markerer variabler i koeffisientplottet over, men endrer ingenting automatisk.</p>
-      <p>
-        <label for="optimize-tolerance-input">Toleranse for RMSEP-økning:</label>
-        <input type="number" id="optimize-tolerance-input" step="any" value="0" />
-        <button id="optimize-button">Optimaliser variabler</button>
-      </p>
-      <p id="optimize-status" class="status"></p>
-      <div id="optimize-history-chart" class="plot hidden"></div>
-      <div id="optimize-summary"></div>
-      <p>Trinn 2: bruk forslaget for å fjerne de markerte variablene og oppdatere resultatene.</p>
-      <button id="apply-optimized-button" class="hidden">Bruk optimalisert utvalg</button>
-    </div>
-
-    <div id="simulation-section">
-      <h3>Hva-hvis-simulering</h3>
-      <p class="status">
-        Verdiene under er i rå enheter (før forbehandling/log10/standardisering).
-        Ekskluderte variabler vises ikke.
-      </p>
-      <button id="simulation-reset-button">Nullstill</button>
-      <p id="simulation-status" class="status"></p>
-      <table id="simulation-table">
-        <thead>
-          <tr>
-            <th>Variabel</th>
-            <th>Basisverdi (rå)</th>
-            <th>Endring</th>
-            <th>Modus</th>
-            <th>Simulert Y</th>
-            <th>Endring (absolutt)</th>
-            <th>Endring (%)</th>
-          </tr>
-        </thead>
-        <tbody id="simulation-table-body"></tbody>
-      </table>
-    </div>
-  </section>
+  </div>
 
   <script src="vendor/plotly.min.js"></script>
   <script src="app.js"></script>

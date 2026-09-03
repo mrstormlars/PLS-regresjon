@@ -2,8 +2,29 @@
 // Norwegian text is used for all user-visible strings; identifiers/comments are English.
 
 const PLOTLY_CONFIG = { responsive: true, displaylogo: false };
-const SELECTION_COLOR = "#e6308a";
+const SELECTION_COLOR = "#E8743B";
 const SIMULATE_DEBOUNCE_MS = 400;
+
+// Shared Plotly layout defaults (palette, font, transparent backgrounds),
+// spread into every Plotly.newPlot layout so all plots share one look.
+const PLOT_LAYOUT = {
+  font: { family: "Inter, 'Segoe UI', system-ui, sans-serif", color: "#2A3550" },
+  paper_bgcolor: "rgba(0,0,0,0)",
+  plot_bgcolor: "rgba(0,0,0,0)",
+  margin: { t: 48, r: 24, b: 48, l: 56 },
+};
+
+// Trace colours shared across plots.
+const COLOR_NAVY = "#16216E";
+const COLOR_SKY = "#1E9FE3";
+const COLOR_ORANGE = "#E8743B";
+
+const VIEWS = {
+  data: "view-data",
+  modell: "view-model",
+  resultater: "view-results",
+  simulering: "view-simulation",
+};
 
 const state = {
   fileId: null,
@@ -35,9 +56,31 @@ const state = {
 
 const el = (id) => document.getElementById(id);
 
-function showSection(id) {
-  el(id).classList.remove("hidden");
+// ---------------------------------------------------------------------------
+// View router: hash-based navigation between the four top-level views.
+// ---------------------------------------------------------------------------
+
+function setViewLocked(name, locked) {
+  const link = document.querySelector(`.nav-link[data-view="${name}"]`);
+  if (link) link.classList.toggle("locked", locked);
 }
+
+function showView(name) {
+  const targetId = VIEWS[name] || VIEWS.data;
+  for (const [viewName, viewId] of Object.entries(VIEWS)) {
+    el(viewId).classList.toggle("hidden", viewId !== targetId);
+    const link = document.querySelector(`.nav-link[data-view="${viewName}"]`);
+    if (link) link.classList.toggle("active", viewName === name);
+  }
+  for (const plotNode of el(targetId).querySelectorAll(".plot")) {
+    if (plotNode.data) Plotly.Plots.resize(plotNode);
+  }
+}
+
+window.addEventListener("hashchange", () => {
+  const name = window.location.hash.replace("#", "") || "data";
+  showView(VIEWS[name] ? name : "data");
+});
 
 function setStatus(id, message, isError = false) {
   const node = el(id);
@@ -105,10 +148,16 @@ el("upload-button").addEventListener("click", async () => {
     }
 
     setStatus("upload-status", `Filen ble lastet opp (${state.sheets.length} ark funnet).`);
+    el("file-chip").textContent = state.fileName;
     showSection("sheet-section");
   } catch (err) {
     setStatus("upload-status", err.message, true);
   }
+});
+
+el("sheet-select").addEventListener("change", () => {
+  if (!state.fileName) return;
+  el("file-chip").textContent = `${state.fileName} (${el("sheet-select").value})`;
 });
 
 el("preview-button").addEventListener("click", async () => {
@@ -131,7 +180,9 @@ el("preview-button").addEventListener("click", async () => {
     populateColumnControls(data.columns);
     setStatus("preview-status", `${data.n_rows} rader totalt i valgt ark.`);
     showSection("preview-section");
-    showSection("config-section");
+    setViewLocked("modell", false);
+    showView("modell");
+    window.location.hash = "#modell";
   } catch (err) {
     setStatus("preview-status", err.message, true);
   }
@@ -190,15 +241,19 @@ function setColumnRowHidden(className, column, hidden) {
   if (row) row.classList.toggle("hidden-row", hidden);
 }
 
-// A column's limit row is relevant whenever EITHER its X-checkbox or its
-// log10-checkbox is checked (a log-only column still needs a limit filter
-// on its base column - see backend/analysis.py's build_model_variables).
+// A column's limit inputs are only usable whenever EITHER its X-checkbox or
+// its log10-checkbox is checked (a log-only column still needs a limit
+// filter on its base column - see backend/analysis.py's
+// build_model_variables). Otherwise they are disabled, not hidden, since
+// limits now live inside the same row as the checkboxes.
 function updateLimitRowVisibility(col) {
   const xColRow = findColumnRow("x-col-row", col);
   if (!xColRow) return;
   const xChecked = xColRow.querySelector(".x-col-checkbox").checked;
   const logChecked = xColRow.querySelector(".log-x-checkbox").checked;
-  setColumnRowHidden("limit-row", col, !(xChecked || logChecked));
+  const enabled = xChecked || logChecked;
+  xColRow.querySelector(".limit-low").disabled = !enabled;
+  xColRow.querySelector(".limit-high").disabled = !enabled;
 }
 
 function populateColumnControls(columns) {
@@ -214,11 +269,14 @@ function populateColumnControls(columns) {
   const xContainer = el("x-cols-container");
   xContainer.innerHTML = "";
   for (const col of columns) {
-    const row = document.createElement("div");
+    const row = document.createElement("tr");
     row.className = "x-col-row";
     row.dataset.column = col;
 
-    const checkboxLabel = document.createElement("label");
+    const nameTd = document.createElement("td");
+    nameTd.textContent = col;
+
+    const xTd = document.createElement("td");
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
     checkbox.value = col;
@@ -227,10 +285,9 @@ function populateColumnControls(columns) {
     checkbox.addEventListener("change", () => {
       updateLimitRowVisibility(col);
     });
-    checkboxLabel.appendChild(checkbox);
-    checkboxLabel.appendChild(document.createTextNode(col));
+    xTd.appendChild(checkbox);
 
-    const logLabel = document.createElement("label");
+    const logTd = document.createElement("td");
     const logCheckbox = document.createElement("input");
     logCheckbox.type = "checkbox";
     logCheckbox.className = "log-x-checkbox";
@@ -238,47 +295,36 @@ function populateColumnControls(columns) {
     logCheckbox.addEventListener("change", () => {
       updateLimitRowVisibility(col);
     });
-    logLabel.appendChild(logCheckbox);
-    logLabel.appendChild(document.createTextNode("log10"));
+    logTd.appendChild(logCheckbox);
 
-    row.appendChild(checkboxLabel);
-    row.appendChild(logLabel);
-    xContainer.appendChild(row);
-  }
-
-  const limitsContainer = el("limits-container");
-  limitsContainer.innerHTML = "";
-  for (const col of columns) {
-    const row = document.createElement("div");
-    row.className = "limit-row";
-    row.dataset.column = col;
-
-    const label = document.createElement("label");
-    label.textContent = col;
-
+    const lowTd = document.createElement("td");
     const lowInput = document.createElement("input");
     lowInput.type = "number";
     lowInput.placeholder = "min";
     lowInput.className = "limit-low";
     lowInput.dataset.column = col;
+    lowTd.appendChild(lowInput);
 
+    const highTd = document.createElement("td");
     const highInput = document.createElement("input");
     highInput.type = "number";
     highInput.placeholder = "maks";
     highInput.className = "limit-high";
     highInput.dataset.column = col;
+    highTd.appendChild(highInput);
 
-    row.appendChild(label);
-    row.appendChild(lowInput);
-    row.appendChild(highInput);
-    limitsContainer.appendChild(row);
+    row.appendChild(nameTd);
+    row.appendChild(xTd);
+    row.appendChild(logTd);
+    row.appendChild(lowTd);
+    row.appendChild(highTd);
+    xContainer.appendChild(row);
   }
 
-  // The first column defaults as Y; hide it from the X list/limits from the start.
+  // The first column defaults as Y; hide it from the X list from the start.
   state.yCol = columns.length ? columns[0] : null;
   if (state.yCol) {
     setColumnRowHidden("x-col-row", state.yCol, true);
-    setColumnRowHidden("limit-row", state.yCol, true);
   }
 }
 
@@ -290,10 +336,8 @@ el("y-col-select").addEventListener("change", () => {
   const oldY = state.yCol;
   if (oldY && oldY !== newY) {
     setColumnRowHidden("x-col-row", oldY, false);
-    setColumnRowHidden("limit-row", oldY, false);
   }
   setColumnRowHidden("x-col-row", newY, true);
-  setColumnRowHidden("limit-row", newY, true);
   state.yCol = newY;
 });
 
@@ -382,9 +426,12 @@ el("analyze-button").addEventListener("click", async () => {
   try {
     const result = await postJson("/api/analyze", payload);
     state.lastAnalyzePayload = payload;
+    setViewLocked("resultater", false);
+    setViewLocked("simulering", false);
+    showView("resultater");
+    window.location.hash = "#resultater";
     renderResults(result);
     setStatus("analyze-status", "Analyse fullført.");
-    showSection("results-section");
   } catch (err) {
     setStatus("analyze-status", err.message, true);
   }
@@ -457,6 +504,10 @@ function updateSelectionSummary() {
   const hasSelection = rows.length > 0 || cols.length > 0;
   el("rerun-without-selected-button").disabled = !hasSelection;
   el("rerun-only-selected-button").disabled = !hasSelection;
+
+  el("selection-chip").textContent = hasSelection
+    ? `${rows.length} rad(er), ${cols.length} kolonne(r) markert`
+    : "Ingen markering";
 }
 
 function refreshRowSelection() {
@@ -761,11 +812,13 @@ function renderOptimizeHistory(data) {
         y: data.history.map((h) => h.rmsep),
         mode: "lines+markers",
         type: "scatter",
+        line: { color: COLOR_NAVY },
         text: data.history.map((h) => h.removed_col),
         hovertemplate: "Iterasjon %{x}<br>Fjernet: %{text}<br>RMSEP: %{y:.4f}<extra></extra>",
       },
     ],
     {
+      ...PLOT_LAYOUT,
       title: "RMSEP per iterasjon (variabeloptimalisering)",
       xaxis: { title: "Iterasjon", dtick: 1 },
       yaxis: { title: "RMSEP" },
@@ -941,6 +994,7 @@ function renderKeyFigures(result) {
   ];
   for (const [label, value] of figures) {
     const div = document.createElement("div");
+    div.className = "stat-tile";
     div.innerHTML = `<strong>${label}</strong><br>${value}`;
     container.appendChild(div);
   }
@@ -957,7 +1011,7 @@ function renderRmseChart(result) {
         mode: "lines+markers",
         type: "scatter",
         name: "RMSEP",
-        line: { color: "#1f77b4" },
+        line: { color: COLOR_NAVY },
       },
       {
         x: components,
@@ -965,10 +1019,11 @@ function renderRmseChart(result) {
         mode: "lines+markers",
         type: "scatter",
         name: "RMSEC",
-        line: { color: "#ff7f0e", dash: "dash" },
+        line: { color: COLOR_SKY, dash: "dash" },
       },
     ],
     {
+      ...PLOT_LAYOUT,
       title: "RMSEP og RMSEC vs. antall komponenter",
       xaxis: { title: "Antall komponenter", dtick: 1 },
       yaxis: { title: "RMSE" },
@@ -980,7 +1035,7 @@ function renderRmseChart(result) {
           y0: 0,
           y1: 1,
           yref: "paper",
-          line: { color: "red", dash: "dot" },
+          line: { color: COLOR_ORANGE, dash: "dot" },
         },
       ],
     },
@@ -990,8 +1045,8 @@ function renderRmseChart(result) {
 
 function renderPredictedActualChart(result) {
   const rowIndex = result.diagnostics.map((d) => d.row_index);
-  const calColor = "#1f77b4";
-  const cvColor = "#ff7f0e";
+  const calColor = COLOR_NAVY;
+  const cvColor = COLOR_SKY;
   const labels = rowIndex.map((r) => `Rad ${r}`);
 
   const traceCal = {
@@ -1033,6 +1088,7 @@ function renderPredictedActualChart(result) {
     "predicted-actual-chart",
     [traceCal, traceCv, traceRef],
     {
+      ...PLOT_LAYOUT,
       title: "Faktisk vs. predikert Y",
       xaxis: { title: "Faktisk Y" },
       yaxis: { title: "Predikert Y" },
@@ -1050,7 +1106,7 @@ function renderPredictedActualChart(result) {
 
 function renderScoresChart(result) {
   const rowIndex = result.scores.map((s) => s.row_index);
-  const baseColor = "#2ca02c";
+  const baseColor = COLOR_NAVY;
 
   Plotly.newPlot(
     "scores-chart",
@@ -1068,6 +1124,7 @@ function renderScoresChart(result) {
       },
     ],
     {
+      ...PLOT_LAYOUT,
       title: "Scores (PC1 vs. PC2)",
       xaxis: { title: "PC1" },
       yaxis: { title: "PC2" },
@@ -1109,6 +1166,7 @@ function renderOutlierMapChart(result) {
       },
     ],
     {
+      ...PLOT_LAYOUT,
       title: "Uteliggerkart",
       xaxis: { title: "X-avstand" },
       yaxis: { title: "y-avstand" },
@@ -1146,7 +1204,7 @@ function updateOutlierMapGuide() {
           yref: "y",
           y0: threshold,
           y1: threshold,
-          line: { color: "red", dash: "dot" },
+          line: { color: COLOR_ORANGE, dash: "dot" },
         },
       ];
     } else if (method === "X_distance") {
@@ -1159,7 +1217,7 @@ function updateOutlierMapGuide() {
           xref: "x",
           x0: threshold,
           x1: threshold,
-          line: { color: "red", dash: "dot" },
+          line: { color: COLOR_ORANGE, dash: "dot" },
         },
       ];
     }
@@ -1179,9 +1237,10 @@ function renderCoefficientsChart(result) {
   // of view, so the COLUMN selection domain works unchanged in both modes.
   const cols = entries.map(([name]) => name);
   const values = entries.map(([, value]) => value);
-  const baseColors = values.map((value) => (value < 0 ? "#d62728" : "#1f77b4"));
+  const baseColors = values.map((value) => (value < 0 ? COLOR_SKY : COLOR_NAVY));
 
   const layout = {
+    ...PLOT_LAYOUT,
     title: isRaw ? "Koeffisienter (rå skala)" : "Koeffisienter (normalisert)",
     xaxis: { title: "Variabel" },
     yaxis: { title: "Koeffisientverdi" },
@@ -1372,3 +1431,8 @@ el("simulation-reset-button").addEventListener("click", () => {
   state.lastSimulation = null; // clear synchronously; runSimulate() below confirms it
   runSimulate();
 });
+
+// ---------------------------------------------------------------------------
+// Initial view: honor a deep link (e.g. #resultater on reload), else "data".
+// ---------------------------------------------------------------------------
+showView(VIEWS[window.location.hash.replace("#", "")] ? window.location.hash.replace("#", "") : "data");
