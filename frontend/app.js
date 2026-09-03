@@ -944,6 +944,230 @@ el("export-report-button").addEventListener("click", async () => {
 });
 
 // ---------------------------------------------------------------------------
+// Model save/load: a .plsmodel file bundles settings + result (+ optional
+// raw data), following the /api/report download pattern for save and the
+// /api/upload multipart pattern for load.
+// ---------------------------------------------------------------------------
+
+function buildModelSettings() {
+  const payload = state.lastAnalyzePayload || {};
+  return {
+    file_id: state.fileId,
+    file_name: state.fileName || "ukjent-fil",
+    sheet: payload.sheet,
+    header_row: payload.header_row,
+    start_row: payload.start_row,
+    end_row: payload.end_row,
+    start_col: payload.start_col,
+    end_col: payload.end_col,
+    y_col: payload.y_col,
+    excluded_cols: payload.excluded_cols || [],
+    excluded_rows: payload.excluded_rows || [],
+    limits: payload.limits || {},
+    log_y: payload.log_y || false,
+    log_x_cols: payload.log_x_cols || [],
+    max_components: payload.max_components,
+    cv_folds: payload.cv_folds,
+  };
+}
+
+async function saveModel(includeData) {
+  if (!state.lastAnalyzeResult) return;
+  el("save-model-menu").classList.add("hidden");
+  setStatus("save-model-status", "Lagrer modell...");
+  try {
+    const response = await fetch("/api/model/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        settings: buildModelSettings(),
+        result: state.lastAnalyzeResult,
+        simulation: state.lastSimulation,
+        columns: state.columns,
+        include_data: includeData,
+      }),
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.detail || "Kunne ikke lagre modellen.");
+    }
+
+    const blob = await response.blob();
+    const disposition = response.headers.get("Content-Disposition") || "";
+    const match = disposition.match(/filename="?([^"]+)"?/);
+    const filename = match ? match[1] : "pls-modell.plsmodel";
+
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+
+    setStatus("save-model-status", "Modellen ble lastet ned.");
+  } catch (err) {
+    setStatus("save-model-status", err.message, true);
+  }
+}
+
+el("save-model-button").addEventListener("click", () => {
+  el("save-model-menu").classList.toggle("hidden");
+});
+el("save-model-with-data-button").addEventListener("click", () => saveModel(true));
+el("save-model-without-data-button").addEventListener("click", () => saveModel(false));
+
+// Applies loaded settings (Y-column, exclusions, limits, log10 flags,
+// excluded rows, cv/component counts) onto the model-view controls. Shared
+// by both load branches below - the controls are the same either way, only
+// where the columns come from (preview vs. manifest) differs.
+function applySettingsToControls(settings) {
+  if (settings.y_col) {
+    el("y-col-select").value = settings.y_col;
+    el("y-col-select").dispatchEvent(new Event("change"));
+  }
+
+  const excludedCols = new Set(settings.excluded_cols || []);
+  const logXCols = new Set(settings.log_x_cols || []);
+  for (const checkbox of document.querySelectorAll(".x-col-checkbox")) {
+    checkbox.checked = !excludedCols.has(checkbox.value);
+  }
+  for (const checkbox of document.querySelectorAll(".log-x-checkbox")) {
+    checkbox.checked = logXCols.has(checkbox.dataset.column);
+  }
+  for (const col of state.columns) updateLimitRowVisibility(col);
+
+  const limits = settings.limits || {};
+  for (const input of document.querySelectorAll(".limit-low")) {
+    const bounds = limits[input.dataset.column];
+    input.value = bounds && bounds.low !== null && bounds.low !== undefined ? bounds.low : "";
+  }
+  for (const input of document.querySelectorAll(".limit-high")) {
+    const bounds = limits[input.dataset.column];
+    input.value = bounds && bounds.high !== null && bounds.high !== undefined ? bounds.high : "";
+  }
+
+  el("log-y-checkbox").checked = !!settings.log_y;
+  if (settings.max_components) el("max-components-input").value = settings.max_components;
+  if (settings.cv_folds) el("cv-folds-input").value = settings.cv_folds;
+  el("excluded-rows-input").value = (settings.excluded_rows || []).join(", ");
+}
+
+// Restores the last-saved simulation state (if any) onto the simulation
+// table's inputs, once renderResults has built the rows, then re-runs the
+// simulation so the shown result matches the restored inputs.
+function restoreSimulation(simulation) {
+  if (!simulation || !simulation.changes) return;
+  for (const [col, change] of Object.entries(simulation.changes)) {
+    const input = findColumnRow("sim-change-input", col);
+    const select = findColumnRow("sim-mode-select", col);
+    if (input) input.value = change.value;
+    if (select) select.value = change.mode;
+  }
+  runSimulate();
+}
+
+async function applyLoadedModel(data) {
+  const settings = data.settings || {};
+
+  if (data.file_id) {
+    state.fileId = data.file_id;
+    state.fileName = settings.file_name;
+    state.sheets = data.sheets || [];
+
+    const sheetSelect = el("sheet-select");
+    sheetSelect.innerHTML = "";
+    for (const sheet of state.sheets) {
+      const option = document.createElement("option");
+      option.value = sheet;
+      option.textContent = sheet;
+      sheetSelect.appendChild(option);
+    }
+    if (settings.sheet) sheetSelect.value = settings.sheet;
+
+    el("header-row-input").value = settings.header_row ?? 1;
+    el("start-row-input").value = settings.start_row ?? "";
+    el("end-row-input").value = settings.end_row ?? "";
+    el("start-col-input").value = settings.start_col ?? "";
+    el("end-col-input").value = settings.end_col ?? "";
+
+    el("file-chip").textContent = `${state.fileName} (${settings.sheet})`;
+    el("file-chip").classList.remove("hidden");
+    showSection("sheet-section");
+
+    const preview = await postJson("/api/preview", {
+      file_id: state.fileId,
+      sheet: settings.sheet,
+      header_row: settings.header_row,
+      start_col: settings.start_col,
+      end_col: settings.end_col,
+    });
+    state.columns = preview.columns;
+    renderPreviewTable(preview.columns, preview.rows);
+    populateColumnControls(preview.columns);
+    showSection("preview-section");
+
+    el("analyze-button").disabled = false;
+    el("optimize-button").disabled = false;
+    setStatus("model-status", "");
+  } else {
+    state.fileId = null;
+    state.fileName = settings.file_name;
+    state.sheets = [];
+    state.columns = data.columns || [];
+    populateColumnControls(state.columns);
+
+    el("file-chip").textContent = state.fileName ? `${state.fileName} (uten rådata)` : "";
+    el("file-chip").classList.toggle("hidden", !state.fileName);
+
+    el("analyze-button").disabled = true;
+    el("optimize-button").disabled = true;
+    setStatus(
+      "model-status",
+      "Modellen ble åpnet uten rådata. Last opp datafilen på nytt for å kjøre en ny analyse."
+    );
+  }
+
+  el("rerun-without-selected-button").disabled = true;
+  el("rerun-only-selected-button").disabled = true;
+
+  applySettingsToControls(settings);
+
+  state.lastAnalyzePayload = { ...settings, file_id: data.file_id };
+  setViewLocked("resultater", false);
+  setViewLocked("simulering", false);
+  showView("resultater");
+  window.location.hash = "#resultater";
+  renderResults(data.result);
+  restoreSimulation(data.simulation);
+}
+
+el("load-model-input").addEventListener("change", () => {
+  el("load-model-button").disabled = !el("load-model-input").files.length;
+});
+
+el("load-model-button").addEventListener("click", async () => {
+  const fileInput = el("load-model-input");
+  if (!fileInput.files.length) return;
+  const formData = new FormData();
+  formData.append("file", fileInput.files[0]);
+
+  setStatus("load-model-status", "Åpner modell...");
+  try {
+    const response = await fetch("/api/model/load", { method: "POST", body: formData });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || "Kunne ikke åpne modellfilen.");
+    }
+    await applyLoadedModel(data);
+    setStatus("load-model-status", "Modellen ble åpnet.");
+  } catch (err) {
+    setStatus("load-model-status", err.message, true);
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Result rendering (Plotly).
 // ---------------------------------------------------------------------------
 
@@ -970,6 +1194,7 @@ function renderResults(result) {
   el("optimize-history-chart").classList.add("hidden");
   el("apply-optimized-button").classList.add("hidden");
   el("export-report-button").disabled = false;
+  el("save-model-button").disabled = false;
 }
 
 function renderMissingValuesSummary(result) {

@@ -51,7 +51,9 @@ def read_model_file(content: bytes) -> tuple[dict, tuple[str, bytes] | None]:
         try:
             manifest = json.loads(manifest_bytes)
         except (json.JSONDecodeError, UnicodeDecodeError) as err:
-            raise ValidationError("model.json i modellfilen er ikke gyldig JSON.") from err
+            raise ValidationError(
+                "model.json i modellfilen er ikke gyldig JSON."
+            ) from err
 
         if manifest.get("schema_version") != config.MODEL_SCHEMA_VERSION:
             raise ValidationError(
@@ -65,8 +67,7 @@ def read_model_file(content: bytes) -> tuple[dict, tuple[str, bytes] | None]:
         data_members = [
             info
             for info in zf.infolist()
-            if info.filename.startswith(config.MODEL_DATA_DIR)
-            and not info.is_dir()
+            if info.filename.startswith(config.MODEL_DATA_DIR) and not info.is_dir()
         ]
         if not data_members:
             return manifest, None

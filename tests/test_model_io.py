@@ -13,7 +13,9 @@ FIXTURES = Path(__file__).parent / "fixtures"
 client = TestClient(app)
 
 
-def _upload(filename: str, content: bytes, content_type: str = "application/octet-stream"):
+def _upload(
+    filename: str, content: bytes, content_type: str = "application/octet-stream"
+):
     return client.post("/api/upload", files={"file": (filename, content, content_type)})
 
 

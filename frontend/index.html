@@ -44,12 +44,20 @@
       <span id="selection-chip" class="chip hidden"></span>
       <button id="analyze-button" class="btn btn-primary">Kjør analyse</button>
       <button id="export-report-button" class="btn btn-accent" disabled>Eksporter rapport (HTML)</button>
+      <div class="dropdown" id="save-model-dropdown">
+        <button id="save-model-button" class="btn btn-accent" disabled>Lagre modell</button>
+        <div id="save-model-menu" class="dropdown-menu hidden">
+          <button id="save-model-with-data-button" class="btn btn-outline">Med rådata</button>
+          <button id="save-model-without-data-button" class="btn btn-outline">Uten rådata</button>
+        </div>
+      </div>
       <button id="clear-selection-button" class="btn btn-outline">Fjern markering</button>
       <button id="rerun-without-selected-button" class="btn btn-outline" disabled>Kjør på nytt uten markerte</button>
       <button id="rerun-only-selected-button" class="btn btn-outline" disabled>Kjør kun med markerte</button>
     </div>
     <p id="analyze-status" class="status"></p>
     <p id="export-report-status" class="status"></p>
+    <p id="save-model-status" class="status"></p>
   </div>
 
   <main class="content">
@@ -62,6 +70,15 @@
         <input type="file" id="file-input" class="input" accept=".xlsx,.csv" />
         <button id="upload-button" class="btn btn-primary" disabled>Last opp</button>
         <p id="upload-status" class="status"></p>
+      </div>
+
+      <div class="card" id="load-model-section">
+        <h3>Åpne modell</h3>
+        <p class="status">Åpne en tidligere lagret modellfil (.plsmodel) for å gjenskape en analyse.</p>
+        <input type="file" id="load-model-input" class="input" accept=".plsmodel" />
+        <button id="load-model-button" class="btn btn-primary" disabled>Åpne modell</button>
+        <p id="load-model-status" class="status"></p>
+        <p id="model-status" class="status"></p>
       </div>
 
       <div class="card hidden" id="sheet-section">
