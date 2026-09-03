@@ -201,7 +201,7 @@ Fant du en feil, eller har du et ønske om ny funksjonalitet? Ta gjerne kontakt:
 
 - **GitHub:** opprett en sak på
   <https://github.com/mrstormlars/PLS-regresjon/issues> (krever GitHub-konto).
-- **E-post:** <martin.storm.larsen@gmail.com>
+- **E-post:** <mrstormlars.eth@gmail.com>
 
 Ved feil er det til stor hjelp om du tar med:
 
