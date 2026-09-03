@@ -369,6 +369,11 @@ table th {
   margin: 0;
 }
 
+#y-col-select {
+  width: auto;
+  min-width: 12rem;
+}
+
 .x-col-table {
   width: auto;
 }
