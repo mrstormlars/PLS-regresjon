@@ -175,6 +175,20 @@ alt tilbake.
 innstillinger, forbehandling og siste simulering. Fila kan åpnes i hvilken som helst nettleser
 og deles med andre uten at de trenger appen.
 
+### Lagre og åpne modeller
+
+**Lagre modell** (i handlingslinjen, tilgjengelig etter en kjørt analyse) lagrer en `.plsmodel`-fil
+du kan åpne igjen senere eller dele med andre:
+
+- **Med rådata:** modellfila inneholder også datasettet du analyserte, slik at du (eller andre)
+  kan justere innstillinger og kjøre analysen på nytt.
+- **Uten rådata:** modellfila inneholder bare innstillinger og resultater, ikke selve dataene.
+  Da kan du se resultatene, men ikke kjøre en ny analyse før du laster opp datafila på nytt.
+
+**Åpne modell** (i Data-visningen) leser en `.plsmodel`-fil og gjenskaper resultatene, innstillingene
+og eventuell simulering. Er rådata ikke lagret i fila, får du beskjed om dette, og knappene for å
+kjøre analyse på nytt er slått av til du laster opp datafila selv.
+
 ## Krav til datasettet
 
 - Format: `.xlsx` (Excel) eller `.csv`, maks 20 MB.

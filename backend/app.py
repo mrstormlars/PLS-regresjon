@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -10,7 +12,7 @@ from fastapi import FastAPI, HTTPException, Response, UploadFile
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from backend import analysis, config, parsing, report
+from backend import analysis, config, model_io, parsing, report
 from backend.parsing import PayloadTooLargeError, ValidationError
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
@@ -112,6 +114,37 @@ class ReportRequest(BaseModel):
     result: dict
     settings: ReportSettings
     simulation: SimulationPayload | None = None
+
+
+class ModelSettings(BaseModel):
+    """The full run settings needed to save/restore an analysis. Extends
+    ReportSettings' range/preprocessing fields with the identifiers
+    (file_id, file_name) and y_col needed to reproduce the run."""
+
+    file_id: str | None = None
+    file_name: str
+    sheet: str
+    header_row: int = config.DEFAULT_HEADER_ROW
+    start_row: int | None = None
+    end_row: int | None = None
+    start_col: int | None = None
+    end_col: int | None = None
+    y_col: str
+    excluded_cols: list[str] = []
+    excluded_rows: list[int] = []
+    limits: dict[str, LimitBounds] = {}
+    log_y: bool = False
+    log_x_cols: list[str] = []
+    max_components: int = config.MAX_COMPONENTS_DEFAULT
+    cv_folds: int = config.CV_FOLDS_DEFAULT
+
+
+class SaveModelRequest(BaseModel):
+    settings: ModelSettings
+    result: dict
+    simulation: SimulationPayload | None = None
+    columns: list[str] = []
+    include_data: bool = False
 
 
 class SimulateRequest(BaseModel):
@@ -304,6 +337,116 @@ async def generate_report(request: ReportRequest):
         media_type="text/html",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@app.post("/api/model/save")
+async def save_model(request: SaveModelRequest):
+    if (
+        not request.result
+        or "coefficients" not in request.result
+        or "diagnostics" not in request.result
+    ):
+        raise HTTPException(
+            status_code=400, detail="Analyseresultatet mangler eller er ufullstendig."
+        )
+
+    settings = request.settings
+    data_sha256 = None
+    data_tuple = None
+
+    if settings.file_id:
+        try:
+            filename, content = parsing.get_upload(settings.file_id)
+        except ValidationError as err:
+            if request.include_data:
+                raise HTTPException(status_code=400, detail=str(err)) from err
+        else:
+            data_sha256 = hashlib.sha256(content).hexdigest()
+            if request.include_data:
+                data_tuple = (filename, content)
+    elif request.include_data:
+        raise HTTPException(
+            status_code=400,
+            detail="Ingen fil er lastet opp; kan ikke lagre modellen med rådata.",
+        )
+
+    settings_dict = settings.model_dump(exclude={"file_id", "file_name"})
+    manifest = {
+        "schema_version": config.MODEL_SCHEMA_VERSION,
+        "created_at": datetime.now(UTC).isoformat(),
+        "source": {
+            "file_name": settings.file_name,
+            "sheet": settings.sheet,
+            "header_row": settings.header_row,
+            "start_row": settings.start_row,
+            "end_row": settings.end_row,
+            "start_col": settings.start_col,
+            "end_col": settings.end_col,
+            "data_sha256": data_sha256,
+            "data_embedded": data_tuple is not None,
+        },
+        "columns": request.columns,
+        "settings": settings_dict,
+        "result": request.result,
+        "simulation": request.simulation.model_dump() if request.simulation else None,
+    }
+
+    model_bytes = model_io.build_model_file(manifest, data_tuple)
+    filename = (
+        f"{config.MODEL_FILENAME_PREFIX}-{datetime.now(UTC).date().isoformat()}"
+        f"{config.MODEL_FILE_EXTENSION}"
+    )
+    return Response(
+        content=model_bytes,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/api/model/load")
+async def load_model(file: UploadFile):
+    content = await file.read()
+    max_total_bytes = (
+        (config.MAX_UPLOAD_SIZE_MB + config.MODEL_MANIFEST_ALLOWANCE_MB) * 1024 * 1024
+    )
+    if len(content) > max_total_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Modellfilen er for stor. Maksimal størrelse er "
+            f"{config.MAX_UPLOAD_SIZE_MB + config.MODEL_MANIFEST_ALLOWANCE_MB} MB.",
+        )
+
+    try:
+        manifest, data = model_io.read_model_file(content)
+    except ValidationError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
+    except PayloadTooLargeError as err:
+        raise HTTPException(status_code=413, detail=str(err)) from err
+
+    file_id = None
+    sheets: list[str] = []
+    if data is not None:
+        data_filename, data_content = data
+        file_id = parsing.store_upload(data_filename, data_content)
+        sheets = parsing.list_sheets(data_filename, data_content)
+
+    settings = dict(manifest.get("settings") or {})
+    settings["file_id"] = file_id
+    settings["file_name"] = (manifest.get("source") or {}).get("file_name")
+
+    return {
+        "meta": {
+            "schema_version": manifest.get("schema_version"),
+            "created_at": manifest.get("created_at"),
+            "source": manifest.get("source"),
+        },
+        "columns": manifest.get("columns", []),
+        "settings": settings,
+        "result": manifest.get("result"),
+        "simulation": manifest.get("simulation"),
+        "file_id": file_id,
+        "sheets": sheets,
+    }
 
 
 class RevalidatingStaticFiles(StaticFiles):
