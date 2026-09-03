@@ -55,6 +55,16 @@ MAX_OPTIMIZE_ITERATIONS = 50
 # POST /api/report: downloaded filename is "<prefix>-<YYYY-MM-DD>.html".
 REPORT_FILENAME_PREFIX = "pls-rapport"
 
+# POST /api/model/save: downloaded filename is "<prefix>-<YYYY-MM-DD><ext>".
+MODEL_SCHEMA_VERSION = 1
+MODEL_FILENAME_PREFIX = "pls-modell"
+MODEL_FILE_EXTENSION = ".plsmodel"
+MODEL_MANIFEST_NAME = "model.json"
+MODEL_DATA_DIR = "data/"
+# Extra headroom (MB) allowed for the model.json manifest itself, on top of
+# MAX_UPLOAD_SIZE_MB, when checking a whole uploaded .plsmodel file's size.
+MODEL_MANIFEST_ALLOWANCE_MB = 1
+
 # Model-variable name for a log10-derived term, given its base column name.
 LOG_COLUMN_NAME_FORMAT = "log10({col})"
 
