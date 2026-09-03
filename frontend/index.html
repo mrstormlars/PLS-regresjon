@@ -10,9 +10,10 @@
 <body>
   <header class="app-header">
     <svg class="app-mark" viewBox="0 0 32 32" aria-hidden="true">
-      <circle cx="9" cy="20" r="2" fill="#ffffff" />
-      <circle cx="16" cy="13" r="2" fill="#ffffff" />
-      <circle cx="23" cy="17" r="2" fill="#ffffff" />
+      <rect width="32" height="32" rx="7" fill="#16216E" />
+      <circle cx="9" cy="20" r="2" fill="#7FC9EE" />
+      <circle cx="16" cy="13" r="2" fill="#7FC9EE" />
+      <circle cx="23" cy="17" r="2" fill="#7FC9EE" />
       <line x1="9" y1="20" x2="23" y2="12" stroke="#E8743B" stroke-width="1.6" stroke-linecap="round" />
     </svg>
     <h1>PLS-regresjon</h1>
@@ -36,6 +37,20 @@
       <span>Simulering</span>
     </a>
   </nav>
+
+  <div id="action-bar">
+    <div id="action-bar-buttons">
+      <span id="file-chip" class="chip"></span>
+      <span id="selection-chip" class="chip">Ingen markering</span>
+      <button id="analyze-button" class="btn btn-primary">Kjør analyse</button>
+      <button id="export-report-button" class="btn btn-accent" disabled>Eksporter rapport (HTML)</button>
+      <button id="clear-selection-button" class="btn btn-outline">Fjern markering</button>
+      <button id="rerun-without-selected-button" class="btn btn-outline" disabled>Kjør på nytt uten markerte</button>
+      <button id="rerun-only-selected-button" class="btn btn-outline" disabled>Kjør kun med markerte</button>
+    </div>
+    <p id="analyze-status" class="status"></p>
+    <p id="export-report-status" class="status"></p>
+  </div>
 
   <main class="content">
     <section id="view-data" class="view">
@@ -247,18 +262,6 @@
       </div>
     </section>
   </main>
-
-  <div id="action-bar">
-    <span id="file-chip" class="chip"></span>
-    <span id="selection-chip" class="chip">Ingen markering</span>
-    <button id="analyze-button" class="btn btn-primary">Kjør analyse</button>
-    <button id="export-report-button" class="btn btn-outline" disabled>Eksporter rapport (HTML)</button>
-    <button id="clear-selection-button" class="btn btn-outline">Fjern markering</button>
-    <button id="rerun-without-selected-button" class="btn btn-outline" disabled>Kjør på nytt uten markerte</button>
-    <button id="rerun-only-selected-button" class="btn btn-outline" disabled>Kjør kun med markerte</button>
-    <p id="analyze-status" class="status"></p>
-    <p id="export-report-status" class="status"></p>
-  </div>
 
   <script src="vendor/plotly.min.js"></script>
   <script src="app.js"></script>

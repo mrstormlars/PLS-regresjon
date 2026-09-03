@@ -56,6 +56,10 @@ const state = {
 
 const el = (id) => document.getElementById(id);
 
+function showSection(id) {
+  el(id).classList.remove("hidden");
+}
+
 // ---------------------------------------------------------------------------
 // View router: hash-based navigation between the four top-level views.
 // ---------------------------------------------------------------------------
@@ -819,7 +823,6 @@ function renderOptimizeHistory(data) {
     ],
     {
       ...PLOT_LAYOUT,
-      title: "RMSEP per iterasjon (variabeloptimalisering)",
       xaxis: { title: "Iterasjon", dtick: 1 },
       yaxis: { title: "RMSEP" },
     },
@@ -995,7 +998,7 @@ function renderKeyFigures(result) {
   for (const [label, value] of figures) {
     const div = document.createElement("div");
     div.className = "stat-tile";
-    div.innerHTML = `<strong>${label}</strong><br>${value}`;
+    div.innerHTML = `<strong>${label}</strong><span class="stat-tile-value">${value}</span>`;
     container.appendChild(div);
   }
 }
@@ -1024,7 +1027,6 @@ function renderRmseChart(result) {
     ],
     {
       ...PLOT_LAYOUT,
-      title: "RMSEP og RMSEC vs. antall komponenter",
       xaxis: { title: "Antall komponenter", dtick: 1 },
       yaxis: { title: "RMSE" },
       shapes: [
@@ -1089,7 +1091,6 @@ function renderPredictedActualChart(result) {
     [traceCal, traceCv, traceRef],
     {
       ...PLOT_LAYOUT,
-      title: "Faktisk vs. predikert Y",
       xaxis: { title: "Faktisk Y" },
       yaxis: { title: "Predikert Y" },
       dragmode: "select",
@@ -1125,7 +1126,6 @@ function renderScoresChart(result) {
     ],
     {
       ...PLOT_LAYOUT,
-      title: "Scores (PC1 vs. PC2)",
       xaxis: { title: "PC1" },
       yaxis: { title: "PC2" },
       dragmode: "select",
@@ -1167,7 +1167,6 @@ function renderOutlierMapChart(result) {
     ],
     {
       ...PLOT_LAYOUT,
-      title: "Uteliggerkart",
       xaxis: { title: "X-avstand" },
       yaxis: { title: "y-avstand" },
       dragmode: "select",
@@ -1241,7 +1240,6 @@ function renderCoefficientsChart(result) {
 
   const layout = {
     ...PLOT_LAYOUT,
-    title: isRaw ? "Koeffisienter (rå skala)" : "Koeffisienter (normalisert)",
     xaxis: { title: "Variabel" },
     yaxis: { title: "Koeffisientverdi" },
     dragmode: "select",

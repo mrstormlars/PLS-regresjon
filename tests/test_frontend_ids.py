@@ -47,3 +47,25 @@ def test_missing_ids_detects_a_synthetic_gap():
     app_js = 'el("known-id"); el("orphaned-id");'
     html = '<div id="known-id"></div>'
     assert missing_ids(app_js, html) == {"orphaned-id"}
+
+
+# C13 guard: a helper referenced as `name(...)` must be defined via
+# `function name(` somewhere in the same file, or not referenced at all.
+# Regression: a rename/removal (e.g. showSection -> showView) that misses a
+# stray call site must fail loudly instead of throwing at runtime in the
+# browser.
+def referenced_but_undefined(app_js: str, name: str) -> bool:
+    is_called = re.search(rf"\b{name}\(", app_js) is not None
+    is_defined = re.search(rf"function {name}\(", app_js) is not None
+    return is_called and not is_defined
+
+
+def test_show_section_is_defined_if_referenced():
+    app_js = (FRONTEND / "app.js").read_text(encoding="utf-8")
+    assert not referenced_but_undefined(app_js, "showSection")
+
+
+def test_referenced_but_undefined_detects_a_synthetic_gap():
+    app_js = "someHelper(1); function otherHelper() {}"
+    assert referenced_but_undefined(app_js, "someHelper")
+    assert not referenced_but_undefined(app_js, "otherHelper")
