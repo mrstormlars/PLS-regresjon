@@ -1135,6 +1135,7 @@ async function applyLoadedModel(data) {
   applySettingsToControls(settings);
 
   state.lastAnalyzePayload = { ...settings, file_id: data.file_id };
+  setViewLocked("modell", false);
   setViewLocked("resultater", false);
   setViewLocked("simulering", false);
   showView("resultater");
