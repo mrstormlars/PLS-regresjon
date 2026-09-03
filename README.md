@@ -93,13 +93,18 @@ kan åpne i Notisblokk og lese selv.
 
 ## Slik bruker du appen
 
-Siden er delt i fem nummererte steg, ovenfra og ned.
+Siden er delt i fire visninger, valgt fra navigasjonsfeltet til venstre: **Data**, **Modell**,
+**Resultater** og **Simulering**. Modell åpnes automatisk etter en vellykket forhåndsvisning,
+og Resultater/Simulering åpnes automatisk etter en vellykket analyse — du trenger ikke klikke
+deg dit manuelt.
 
-### 1. Last opp datasett
+Nederst på siden ligger en fast handlingslinje med filnavn, gjeldende markering,
+**Kjør analyse**, **Eksporter rapport (HTML)** og markeringsknappene. Den følger med uansett
+hvilken visning du står i.
+
+### Data
 
 Velg en `.xlsx`- eller `.csv`-fil og klikk **Last opp**. Maks filstørrelse er 20 MB.
-
-### 2. Velg ark og rader
 
 - **Ark:** hvilket regneark i Excel-fila som skal brukes (CSV har bare ett).
 - **Header-rad:** Excel-radnummeret der kolonneoverskriftene står. Standard er rad 1. Har fila
@@ -108,31 +113,28 @@ Velg en `.xlsx`- eller `.csv`-fil og klikk **Last opp**. Maks filstørrelse er 2
   av arket skal brukes. Kolonner kan oppgis som bokstav (`A`, `D`) eller tall (`1`, `4`). Alle
   numre er som i Excel (1-basert).
 
-Klikk **Forhåndsvis** for å se de første radene slik appen tolker dem.
+Klikk **Forhåndsvis** for å se de første radene slik appen tolker dem, i en tabell med de
+første 20 radene. Ser noe galt ut (feil overskriftsrad, tall som vises som tekst), juster
+innstillingene over og forhåndsvis på nytt.
 
-### 3. Forhåndsvisning
-
-En tabell med de første 20 radene. Ser noe galt ut (feil overskriftsrad, tall som vises som
-tekst), gå tilbake til steg 2 og juster.
-
-### 4. Velg variabler og innstillinger
+### Modell
 
 - **Y-variabel (respons):** kolonnen du vil predikere.
-- **X-variabler (prediktorer):** huk av kolonnene som skal brukes som forklaringsvariabler.
-  For hver kolonne kan du velge lineært ledd, **log10**-ledd, eller begge. Log10 er nyttig for
-  variabler som spenner over flere størrelsesordener.
-- **Grenseverdier per kolonne:** valgfritt `min`/`maks` per kolonne. Rader med verdier utenfor
-  grensene fjernes før analysen. Praktisk for å luke ut nedetid, målefeil og lignende.
+- **X-variabler (prediktorer):** for hver kolonne krysser du av for lineært ledd (**X**),
+  **log10**-ledd, eller begge, og kan sette valgfrie grenseverdier `min`/`maks` for kolonnen i
+  samme rad. Log10 er nyttig for variabler som spenner over flere størrelsesordener.
+  Rader med verdier utenfor grensene fjernes før analysen — praktisk for å luke ut nedetid,
+  målefeil og lignende.
 - **Bruk log10 av Y-variabelen:** transformerer responsen før modellen tilpasses.
 - **Maks antall komponenter:** øvre grense for hvor mange PLS-komponenter som prøves ut
   (standard 10). Appen velger selv det antallet som gir lavest RMSEP.
 - **Antall CV-folder:** antall deler i kryssvalideringen (standard 10).
 - **Ekskluderte rader:** Excel-radnumre som skal holdes utenfor, kommaseparert.
 
-Klikk **Kjør analyse**. Rader med tomme eller ikke-numeriske verdier i de valgte kolonnene
-fjernes automatisk, og du får beskjed om hvor mange.
+Klikk **Kjør analyse** i handlingslinjen nederst. Rader med tomme eller ikke-numeriske verdier
+i de valgte kolonnene fjernes automatisk, og du får beskjed om hvor mange.
 
-### 5. Resultater
+### Resultater
 
 **Nøkkeltall** øverst: optimalt antall komponenter, RMSEP og RMSEC ved dette antallet, samt R²
 for kalibrering og kryssvalidering. Lav RMSEP og høy R² kryssvalidering er det du ønsker. Stort
