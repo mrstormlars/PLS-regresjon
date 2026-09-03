@@ -110,6 +110,15 @@ h1, h2, h3, h4 {
   color: var(--ink-400);
 }
 
+.nav-link span {
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.nav-rail:hover .nav-link span {
+  opacity: 1;
+}
+
 .nav-link:hover {
   background: var(--sky-pale);
 }
@@ -358,6 +367,15 @@ table th {
   display: inline-block;
   width: 6rem;
   margin: 0;
+}
+
+.x-col-table {
+  width: auto;
+}
+
+.x-col-table th,
+.x-col-table td {
+  white-space: nowrap;
 }
 
 .x-col-table input {

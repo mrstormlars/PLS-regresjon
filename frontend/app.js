@@ -122,6 +122,10 @@ function parseColumnInput(raw) {
   return index;
 }
 
+el("file-input").addEventListener("change", () => {
+  el("upload-button").disabled = !el("file-input").files.length;
+});
+
 el("upload-button").addEventListener("click", async () => {
   const fileInput = el("file-input");
   if (!fileInput.files.length) {
@@ -153,6 +157,7 @@ el("upload-button").addEventListener("click", async () => {
 
     setStatus("upload-status", `Filen ble lastet opp (${state.sheets.length} ark funnet).`);
     el("file-chip").textContent = state.fileName;
+    el("file-chip").classList.remove("hidden");
     showSection("sheet-section");
   } catch (err) {
     setStatus("upload-status", err.message, true);
@@ -509,9 +514,9 @@ function updateSelectionSummary() {
   el("rerun-without-selected-button").disabled = !hasSelection;
   el("rerun-only-selected-button").disabled = !hasSelection;
 
-  el("selection-chip").textContent = hasSelection
-    ? `${rows.length} rad(er), ${cols.length} kolonne(r) markert`
-    : "Ingen markering";
+  const chip = el("selection-chip");
+  chip.textContent = hasSelection ? `${rows.length} rad(er), ${cols.length} kolonne(r) markert` : "";
+  chip.classList.toggle("hidden", !hasSelection);
 }
 
 function refreshRowSelection() {

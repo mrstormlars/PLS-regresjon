@@ -40,8 +40,8 @@
 
   <div id="action-bar">
     <div id="action-bar-buttons">
-      <span id="file-chip" class="chip"></span>
-      <span id="selection-chip" class="chip">Ingen markering</span>
+      <span id="file-chip" class="chip hidden"></span>
+      <span id="selection-chip" class="chip hidden"></span>
       <button id="analyze-button" class="btn btn-primary">Kjør analyse</button>
       <button id="export-report-button" class="btn btn-accent" disabled>Eksporter rapport (HTML)</button>
       <button id="clear-selection-button" class="btn btn-outline">Fjern markering</button>
@@ -60,7 +60,7 @@
       <div class="card" id="upload-section">
         <h3>Last opp datasett</h3>
         <input type="file" id="file-input" class="input" accept=".xlsx,.csv" />
-        <button id="upload-button" class="btn btn-primary">Last opp</button>
+        <button id="upload-button" class="btn btn-primary" disabled>Last opp</button>
         <p id="upload-status" class="status"></p>
       </div>
 
